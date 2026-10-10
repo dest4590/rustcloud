@@ -1,0 +1,25 @@
+[[permission]]
+identifier = "allow-all-commands"
+description = "Enables all application commands"
+commands.allow = [
+  "track_changed",
+  "save_audio_file",
+  "rust_play_stream",
+  "rust_pause_stream",
+  "rust_resume_stream",
+  "rust_stop_stream",
+  "rust_seek_stream",
+  "rust_set_volume",
+  "rust_set_playback_speed",
+  "rust_set_dsp_config",
+  "get_audio_output_devices",
+  "set_audio_output_device",
+  "rust_sync_audio_position",
+  "set_discord_rpc_enabled",
+  "set_smtc_enabled",
+  "rust_audio_status",
+  "set_proxy_config",
+  "rust_resolve_stream",
+  "test_proxy_connection",
+  "rust_proxy_http"
+]

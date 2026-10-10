@@ -1,0 +1,79 @@
+:root {
+  --rc-bg: #0d0d0d;
+  --rc-bg-header: #141414;
+  --rc-bg-card: #141414;
+  --rc-bg-subtle: #0d0d0d;
+  --rc-border: #222222;
+  --rc-border-header: #222222;
+  --rc-primary: #ff5500;
+  --rc-primary-hover: #ff6a1a;
+  --rc-text: #ffffff;
+  --rc-text-muted: #888888;
+  --rc-text-light: #b0b0b0;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d0d0d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #242424;
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #ff5500;
+}
+
+.rc-card-box {
+  background: var(--rc-bg-card);
+  border: 1px solid var(--rc-border);
+  padding: 10px 12px;
+  border-radius: 0;
+}
+
+.rc-btn {
+  background: #1a1a1a;
+  border: 1px solid #282828;
+  color: #cccccc;
+  padding: 5px 10px;
+  border-radius: 0;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.1s,
+    border-color 0.1s,
+    color 0.1s;
+}
+
+.rc-btn:hover:not(:disabled) {
+  background: #242424;
+  border-color: #383838;
+  color: #ffffff;
+}
+
+.rc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rc-btn-primary {
+  background: var(--rc-primary);
+  border-color: var(--rc-primary);
+  color: #ffffff;
+}
+
+.rc-btn-primary:hover:not(:disabled) {
+  background: var(--rc-primary-hover);
+  border-color: var(--rc-primary-hover);
+}
+
+.rc-btn-full {
+  width: 100%;
+}
