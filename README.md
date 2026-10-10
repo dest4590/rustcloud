@@ -1,6 +1,8 @@
-# rustcloud
-
-> soundcloud desktop client built with tauri v2, rust, and vue 3.
+<div align="center">
+   <img src="public/logo.svg" width="200" height="200" alt="logo" />
+   <h1>rustcloud</h1>
+   <sub>soundcloud desktop client built with tauri v2, rust, and vue 3.</sub>
+</div>
 
 ---
 
