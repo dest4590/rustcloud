@@ -43,7 +43,9 @@ export function restoreElement(el: HTMLMediaElement): void {
     const muted = virtualMuted.get(el) ?? false;
     if (mutedDesc.get!.call(el) !== muted) mutedDesc.set!.call(el, muted);
     const vol = virtualVolume.get(el) ?? 1;
-    if (volumeDesc.get!.call(el) !== vol) volumeDesc.set!.call(el, vol);
+    const linear = vol > 0 && vol <= 1 ? Math.cbrt(vol) : vol;
+    if (volumeDesc.get!.call(el) !== linear)
+      volumeDesc.set!.call(el, linear);
   } catch {}
 }
 
@@ -141,15 +143,18 @@ export function initAudioHooks(): void {
     },
     set(this: HTMLMediaElement, val: number) {
       allMediaElements.add(this);
+      const linear = val > 0 && val <= 1 ? Math.cbrt(val) : val;
       if (!controlled(this)) {
-        volumeDesc.set!.call(this, val);
+        volumeDesc.set!.call(this, linear);
         virtualVolume.set(this, val);
         return;
       }
       const prev = virtualVolume.get(this);
       virtualVolume.set(this, val);
-      if (prev === undefined || Math.abs(prev - val) >= 0.005) {
-        onMediaVolume(val);
+      const prevLinear =
+        prev !== undefined && prev > 0 && prev <= 1 ? Math.cbrt(prev) : prev;
+      if (prevLinear === undefined || Math.abs(prevLinear - linear) >= 0.002) {
+        onMediaVolume(linear);
       }
       if (volumeDesc.get!.call(this) !== 0) {
         volumeDesc.set!.call(this, 0);
@@ -170,6 +175,15 @@ export function initAudioHooks(): void {
       allMediaElements.add(this);
       virtualMuted.set(this, val);
       mutedDesc.set!.call(this, controlled(this) ? true : val);
+      if (controlled(this)) {
+        if (val) {
+          onMediaVolume(0);
+        } else {
+          const v = virtualVolume.get(this) ?? 1;
+          const linear = v > 0 && v <= 1 ? Math.cbrt(v) : v;
+          onMediaVolume(linear);
+        }
+      }
     },
   });
 

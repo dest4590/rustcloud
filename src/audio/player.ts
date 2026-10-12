@@ -761,7 +761,7 @@ export function onMediaVolume(volume: number): void {
   }
 
   const clamped = Math.max(0, Math.min(2, volume));
-  if (lastSentVolume >= 0 && Math.abs(clamped - lastSentVolume) < 0.005) {
+  if (lastSentVolume >= 0 && Math.abs(clamped - lastSentVolume) < 0.002) {
     return;
   }
 
