@@ -33,6 +33,7 @@ pub fn create_agent(proxy: Option<&str>, timeout: Option<Duration>) -> Result<Ag
 }
 
 pub fn test_proxy_connection(proxy_url: &str) -> Result<String, String> {
+    println!("[rustcloud-audio] Testing proxy connection: {proxy_url}");
     let agent = create_agent(Some(proxy_url), Some(Duration::from_secs(12)))?;
     let req = agent.get("http://ip-api.com/json");
     match req.call() {
@@ -50,17 +51,26 @@ pub fn test_proxy_connection(proxy_url: &str) -> Result<String, String> {
                             .and_then(|c| c.as_str())
                             .unwrap_or("");
                         let query = json.get("query").and_then(|q| q.as_str()).unwrap_or("");
-                        return Ok(format!("{country} ({country_code}) • {query}"));
+                        let msg = format!("{country} ({country_code}) • {query}");
+                        println!("[rustcloud-audio] Proxy connection success: {msg}");
+                        return Ok(msg);
                     }
                 }
             }
+            println!("[rustcloud-audio] Proxy connected successfully");
             Ok("proxy connected successfully".to_string())
         }
         Err(e) => {
             let sc_req = agent.get("https://api-v2.soundcloud.com/");
             match sc_req.call() {
-                Ok(_) => Ok("proxy connected to soundcloud".to_string()),
-                Err(_) => Err(format!("proxy connection failed: {e}")),
+                Ok(_) => {
+                    println!("[rustcloud-audio] Proxy connected to soundcloud directly");
+                    Ok("proxy connected to soundcloud".to_string())
+                }
+                Err(sc_err) => {
+                    eprintln!("[rustcloud-audio] Proxy connection failed: {e} / soundcloud: {sc_err}");
+                    Err(format!("proxy connection failed: {e}"))
+                }
             }
         }
     }
@@ -108,7 +118,14 @@ pub fn execute_http_request(
         "DELETE" => append_headers(agent.delete(url), headers.as_ref()).call(),
         _ => append_headers(agent.get(url), headers.as_ref()).call(),
     }
-    .map_err(|e| format!("proxy http error: {e}"))?;
+    .map_err(|e| {
+        eprintln!(
+            "[rustcloud-audio] HTTP request error ({} {}): {e}",
+            method,
+            sanitize_url_for_log(url)
+        );
+        format!("proxy http error: {e}")
+    })?;
 
     let status = res.status().as_u16();
     let mut resp_headers = HashMap::new();
@@ -160,6 +177,10 @@ pub fn resolve_stream_api(
     proxy: Option<&str>,
 ) -> Result<ResolvedStream, String> {
     let clean_url = track_url.split('?').next().unwrap_or(track_url);
+    println!(
+        "[rustcloud-audio] Resolving stream for: {}",
+        sanitize_url_for_log(clean_url)
+    );
     let resolve_url = format!(
         "https://api-v2.soundcloud.com/resolve?url={}&client_id={}",
         urlencode(clean_url),
@@ -172,22 +193,28 @@ pub fn resolve_stream_api(
         req = req.header("Authorization", auth);
     }
 
-    let mut res = req
-        .call()
-        .map_err(|e| format!("resolve_stream_api failed: {e}"))?;
+    let mut res = req.call().map_err(|e| {
+        eprintln!("[rustcloud-audio] Track resolve request failed: {e}");
+        format!("resolve_stream_api failed: {e}")
+    })?;
     let mut raw_bytes = Vec::new();
-    res.body_mut()
-        .as_reader()
-        .read_to_end(&mut raw_bytes)
-        .map_err(|e| format!("read track info failed: {e}"))?;
+    res.body_mut().as_reader().read_to_end(&mut raw_bytes).map_err(|e| {
+        eprintln!("[rustcloud-audio] Read track info failed: {e}");
+        format!("read track info failed: {e}")
+    })?;
 
-    let track_data: serde_json::Value =
-        serde_json::from_slice(&raw_bytes).map_err(|e| format!("parse track json failed: {e}"))?;
+    let track_data: serde_json::Value = serde_json::from_slice(&raw_bytes).map_err(|e| {
+        eprintln!("[rustcloud-audio] Parse track JSON failed: {e}");
+        format!("parse track json failed: {e}")
+    })?;
     let media = track_data
         .get("media")
         .and_then(|m| m.get("transcodings"))
         .and_then(|t| t.as_array())
-        .ok_or_else(|| "no media transcodings in track info".to_string())?;
+        .ok_or_else(|| {
+            eprintln!("[rustcloud-audio] No media transcodings in track info");
+            "no media transcodings in track info".to_string()
+        })?;
 
     let mut candidate_urls: Vec<(i32, String, bool, String)> = Vec::new();
 
@@ -296,7 +323,10 @@ pub fn resolve_stream_api(
         break;
     }
 
-    chosen_stream.ok_or(last_error)
+    chosen_stream.ok_or_else(|| {
+        eprintln!("[rustcloud-audio] Failed to select stream: {last_error}");
+        last_error
+    })
 }
 
 pub fn resolve_direct_media_url(
@@ -351,6 +381,10 @@ pub fn fetch_hls_stream(
     auth_header: Option<&str>,
     proxy_config: Option<&ProxyConfig>,
 ) -> Result<Vec<u8>, String> {
+    println!(
+        "[rustcloud-audio] Fetching HLS playlist: {}",
+        sanitize_url_for_log(playlist_url)
+    );
     let proxy = proxy_config.and_then(|p| if p.enabled { p.url.as_deref() } else { None });
     let agent = create_agent(proxy, Some(Duration::from_secs(30)))?;
 
@@ -358,9 +392,10 @@ pub fn fetch_hls_stream(
     if let Some(auth) = auth_header {
         req = req.header("Authorization", auth);
     }
-    let mut res = req
-        .call()
-        .map_err(|e| format!("hls playlist fetch error: {e}"))?;
+    let mut res = req.call().map_err(|e| {
+        eprintln!("[rustcloud-audio] HLS playlist fetch error: {e}");
+        format!("hls playlist fetch error: {e}")
+    })?;
 
     let mut body = String::new();
     res.body_mut()
@@ -392,6 +427,7 @@ pub fn fetch_hls_stream(
     }
 
     if segments.is_empty() {
+        eprintln!("[rustcloud-audio] HLS playlist contains no media segments");
         return Err("no segments found in hls playlist".to_string());
     }
 
@@ -401,6 +437,11 @@ pub fn fetch_hls_stream(
     let next_idx = Arc::new(AtomicUsize::new(0));
     let segs = Arc::new(segments);
     let worker_count = 8.min(seg_count);
+
+    println!(
+        "[rustcloud-audio] Downloading {seg_count} HLS segments (init: {}) with {worker_count} workers",
+        init_url.is_some()
+    );
 
     thread::scope(|s| {
         for _ in 0..worker_count {
@@ -460,10 +501,18 @@ pub fn fetch_hls_stream(
     for (i, seg) in guard.iter().enumerate() {
         match seg {
             Some(b) => final_bytes.extend_from_slice(b),
-            None => return Err(format!("missing segment {i}")),
+            None => {
+                eprintln!("[rustcloud-audio] HLS stream missing segment {i}/{seg_count}");
+                return Err(format!("missing segment {i}"));
+            }
         }
     }
 
+    println!(
+        "[rustcloud-audio] HLS download complete ({} segments, {:.2} MB)",
+        seg_count,
+        final_bytes.len() as f32 / (1024.0 * 1024.0)
+    );
     Ok(final_bytes)
 }
 
@@ -478,16 +527,29 @@ pub fn download_stream_bytes(
     {
         fetch_hls_stream(stream_url, auth_header, proxy_config)
     } else {
+        println!(
+            "[rustcloud-audio] Downloading direct stream: {}",
+            sanitize_url_for_log(stream_url)
+        );
         let proxy = proxy_config.and_then(|p| if p.enabled { p.url.as_deref() } else { None });
         let agent = create_agent(proxy, Some(Duration::from_secs(60)))?;
         let mut req = agent.get(stream_url);
         if let Some(auth) = auth_header {
             req = req.header("Authorization", auth);
         }
-        let mut res = req.call().map_err(|e| format!("http get error: {e}"))?;
+        let mut res = req.call().map_err(|e| {
+            eprintln!("[rustcloud-audio] Direct stream HTTP error: {e}");
+            format!("http get error: {e}")
+        })?;
         let mut bytes = Vec::new();
-        std::io::copy(&mut res.body_mut().as_reader(), &mut bytes)
-            .map_err(|e| format!("read error: {e}"))?;
+        std::io::copy(&mut res.body_mut().as_reader(), &mut bytes).map_err(|e| {
+            eprintln!("[rustcloud-audio] Direct stream read error: {e}");
+            format!("read error: {e}")
+        })?;
+        println!(
+            "[rustcloud-audio] Direct stream downloaded ({:.2} MB)",
+            bytes.len() as f32 / (1024.0 * 1024.0)
+        );
         Ok(bytes)
     }
 }

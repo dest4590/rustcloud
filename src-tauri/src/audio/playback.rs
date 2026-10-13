@@ -21,23 +21,37 @@ pub fn open_sink_for_device(device_name: Option<&str>) -> Option<MixerDeviceSink
     let host = rodio::cpal::default_host();
     match device_name {
         Some(name) => {
+            println!("[rustcloud-audio] Opening sink for device: {name}");
             let found_dev = host
                 .output_devices()
                 .ok()
                 .and_then(|mut devs| devs.find(|d| get_device_name(d) == name));
             if let Some(dev) = found_dev {
                 match DeviceSinkBuilder::from_device(dev) {
-                    Ok(builder) => builder.open_sink_or_fallback().ok(),
+                    Ok(builder) => match builder.open_sink_or_fallback() {
+                        Ok(sink) => Some(sink),
+                        Err(e) => {
+                            eprintln!("[rustcloud-audio] open_sink_or_fallback error: {e}");
+                            DeviceSinkBuilder::open_default_sink().ok()
+                        }
+                    },
                     Err(e) => {
                         eprintln!("[rustcloud-audio] open device error: {e}");
                         DeviceSinkBuilder::open_default_sink().ok()
                     }
                 }
             } else {
+                eprintln!("[rustcloud-audio] device '{name}' not found, falling back to default sink");
                 DeviceSinkBuilder::open_default_sink().ok()
             }
         }
-        None => DeviceSinkBuilder::open_default_sink().ok(),
+        None => match DeviceSinkBuilder::open_default_sink() {
+            Ok(sink) => Some(sink),
+            Err(e) => {
+                eprintln!("[rustcloud-audio] Failed to open default audio sink: {e}");
+                None
+            }
+        },
     }
 }
 
@@ -46,11 +60,16 @@ pub fn create_decoder_and_seek(
     start_secs: Option<f32>,
 ) -> Result<Decoder<Cursor<Vec<u8>>>, String> {
     let cursor = Cursor::new(bytes.to_vec());
-    let mut decoder = Decoder::new(cursor).map_err(|e| format!("decode error: {e}"))?;
+    let mut decoder = Decoder::new(cursor).map_err(|e| {
+        eprintln!("[rustcloud-audio] Decoder initialization error: {e}");
+        format!("decode error: {e}")
+    })?;
     if let Some(secs) = start_secs {
         if secs > 0.05 {
             let dur = Duration::from_secs_f32(secs);
-            let _ = decoder.try_seek(dur);
+            if let Err(e) = decoder.try_seek(dur) {
+                eprintln!("[rustcloud-audio] Initial decoder seek to {secs:.2}s failed: {e:?}");
+            }
         }
     }
     Ok(decoder)

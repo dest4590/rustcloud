@@ -906,6 +906,89 @@
 
         <div class="rc-toggle-row">
           <div class="rc-toggle-row-text">
+            <div class="rc-toggle-row-title">loudness normalization</div>
+            <div class="rc-toggle-row-desc">
+              matches playback volume across tracks
+            </div>
+          </div>
+          <div
+            class="rc-custom-switch"
+            :class="{ active: config.loudnessNormalization }"
+            role="switch"
+            :aria-checked="config.loudnessNormalization"
+            tabindex="0"
+            @click="
+              config.loudnessNormalization = !config.loudnessNormalization;
+              onEffectParamChange();
+            "
+            @keydown.space.prevent="
+              config.loudnessNormalization = !config.loudnessNormalization;
+              onEffectParamChange();
+            "
+            @keydown.enter.prevent="
+              config.loudnessNormalization = !config.loudnessNormalization;
+              onEffectParamChange();
+            "
+          >
+            <div class="rc-switch-track">
+              <div class="rc-switch-thumb"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rc-effect-control" v-if="config.loudnessNormalization">
+          <div class="rc-control-meta">
+            <span class="rc-control-name">target</span>
+            <span
+              class="rc-value-badge"
+              :class="{ highlighted: config.targetLufs !== -14 }"
+            >
+              {{ config.targetLufs }} lufs
+            </span>
+          </div>
+
+          <div
+            class="rc-custom-slider-track"
+            role="slider"
+            aria-label="target loudness"
+            :aria-valuemin="-24"
+            :aria-valuemax="-9"
+            :aria-valuenow="config.targetLufs"
+            tabindex="0"
+            @pointerdown="startSliderDrag('targetLufs', -24, -9, 1, $event)"
+            @pointermove="onSliderPointerMove('targetLufs', -24, -9, 1, $event)"
+            @pointerup="stopSliderDrag('targetLufs', $event)"
+            @pointercancel="stopSliderDrag('targetLufs', $event)"
+            @dblclick="
+              config.targetLufs = -14;
+              onEffectParamChange();
+            "
+          >
+            <div
+              class="rc-slider-center-tick"
+              :style="{ left: `${((-14 - -24) / (-9 - -24)) * 100}%` }"
+            ></div>
+            <div
+              class="rc-custom-slider-fill"
+              :style="{ width: `${((config.targetLufs - -24) / (-9 - -24)) * 100}%` }"
+            ></div>
+            <div
+              class="rc-custom-slider-thumb"
+              :style="{
+                left: `calc(${((config.targetLufs - -24) / (-9 - -24)) * 100}% - 6px)`,
+              }"
+            ></div>
+          </div>
+
+          <div class="rc-scale-labels">
+            <span>-24 lufs</span>
+            <span>-14 lufs</span>
+            <span>-9 lufs</span>
+          </div>
+        </div>
+
+        <div class="rc-toggle-row" style="margin-top: 8px;">
+          <div class="rc-toggle-row-text">
             <div class="rc-toggle-row-title">limiter</div>
             <div class="rc-toggle-row-desc">
               prevents digital clipping and output distortion
@@ -1096,6 +1179,16 @@ function detectActivePreset(c: DspConfig): string {
       continue;
     if (preset.limiter !== undefined && preset.limiter !== c.limiter) continue;
     if (
+      preset.loudnessNormalization !== undefined &&
+      preset.loudnessNormalization !== c.loudnessNormalization
+    )
+      continue;
+    if (
+      preset.targetLufs !== undefined &&
+      preset.targetLufs !== c.targetLufs
+    )
+      continue;
+    if (
       preset.playbackSpeed !== undefined &&
       preset.playbackSpeed !== c.playbackSpeed
     )
@@ -1122,7 +1215,8 @@ const hasActiveEffects = computed(() => {
     config.reverbWet > 0 ||
     config.playbackSpeed !== 1.0 ||
     config.pitchShift !== 0 ||
-    !config.limiter
+    !config.limiter ||
+    config.loudnessNormalization
   );
 });
 
@@ -1416,6 +1510,8 @@ function resetAllToDefault() {
   config.reverbSize = 50;
   config.reverbDamp = 40;
   config.limiter = true;
+  config.loudnessNormalization = false;
+  config.targetLufs = -14;
   config.playbackSpeed = 1.0;
   config.pitchShift = 0;
   activePreset.value = "flat";
@@ -1435,6 +1531,9 @@ function applyPreset(key: string) {
   if (p.reverbSize !== undefined) config.reverbSize = p.reverbSize;
   if (p.reverbDamp !== undefined) config.reverbDamp = p.reverbDamp;
   if (p.limiter !== undefined) config.limiter = p.limiter;
+  if (p.loudnessNormalization !== undefined)
+    config.loudnessNormalization = p.loudnessNormalization;
+  if (p.targetLufs !== undefined) config.targetLufs = p.targetLufs;
   if (p.playbackSpeed !== undefined) config.playbackSpeed = p.playbackSpeed;
   if (p.pitchShift !== undefined) config.pitchShift = p.pitchShift;
   activePreset.value = key;

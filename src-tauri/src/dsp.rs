@@ -51,6 +51,10 @@ fn default_playback_speed() -> f32 {
     1.0
 }
 
+fn default_target_lufs() -> f32 {
+    -14.0
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DspConfig {
     pub enabled: bool,
@@ -74,6 +78,10 @@ pub struct DspConfig {
     pub reverb_damp: f32,
     #[serde(default = "default_true")]
     pub limiter: bool,
+    #[serde(rename = "loudnessNormalization", default)]
+    pub loudness_normalization: bool,
+    #[serde(rename = "targetLufs", default = "default_target_lufs")]
+    pub target_lufs: f32,
     #[serde(rename = "playbackSpeed", default = "default_playback_speed")]
     pub playback_speed: f32,
     #[serde(rename = "pitchShift", default)]
@@ -94,6 +102,8 @@ impl Default for DspConfig {
             reverb_size: 50.0,
             reverb_damp: 40.0,
             limiter: true,
+            loudness_normalization: false,
+            target_lufs: -14.0,
             playback_speed: 1.0,
             pitch_shift: 0.0,
         }
@@ -525,6 +535,184 @@ impl StereoPitchShifter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct KWeightingFilter {
+    high_shelf_coeffs: BiquadCoeffs,
+    rlb_coeffs: BiquadCoeffs,
+    state_hs_l: ChannelFilterState,
+    state_rlb_l: ChannelFilterState,
+    state_hs_r: ChannelFilterState,
+    state_rlb_r: ChannelFilterState,
+}
+
+impl KWeightingFilter {
+    pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(8000.0);
+
+        // Stage 1: High shelf filter (head model) - ITU-R BS.1770
+        // f0 = 1681.9744509555319 Hz, gain = 3.99984385397 dB
+        let f0_hs = 1681.97445;
+        let v_h = 10.0_f32.powf(3.99984385 / 20.0);
+        let omega_hs = 2.0 * PI * f0_hs / sr;
+        let k_hs = (omega_hs * 0.5).tan();
+        let a0_hs = 1.0 + (2.0_f32).sqrt() * k_hs + k_hs * k_hs;
+        let hs_coeffs = BiquadCoeffs {
+            b0: (v_h + (2.0 * v_h).sqrt() * k_hs + k_hs * k_hs) / a0_hs,
+            b1: (2.0 * (k_hs * k_hs - v_h)) / a0_hs,
+            b2: (v_h - (2.0 * v_h).sqrt() * k_hs + k_hs * k_hs) / a0_hs,
+            a1: (2.0 * (k_hs * k_hs - 1.0)) / a0_hs,
+            a2: (1.0 - (2.0_f32).sqrt() * k_hs + k_hs * k_hs) / a0_hs,
+        };
+
+        // Stage 2: RLB weighting high-pass filter - ITU-R BS.1770
+        // f0 = 38.13547087602444 Hz, Q = 0.50032703732539
+        let f0_rlb = 38.13547;
+        let q_rlb = 0.500327;
+        let omega_rlb = 2.0 * PI * f0_rlb / sr;
+        let k_rlb = (omega_rlb * 0.5).tan();
+        let a0_rlb = 1.0 + k_rlb / q_rlb + k_rlb * k_rlb;
+        let rlb_coeffs = BiquadCoeffs {
+            b0: 1.0 / a0_rlb,
+            b1: -2.0 / a0_rlb,
+            b2: 1.0 / a0_rlb,
+            a1: (2.0 * (k_rlb * k_rlb - 1.0)) / a0_rlb,
+            a2: (1.0 - k_rlb / q_rlb + k_rlb * k_rlb) / a0_rlb,
+        };
+
+        Self {
+            high_shelf_coeffs: hs_coeffs,
+            rlb_coeffs,
+            state_hs_l: ChannelFilterState::default(),
+            state_rlb_l: ChannelFilterState::default(),
+            state_hs_r: ChannelFilterState::default(),
+            state_rlb_r: ChannelFilterState::default(),
+        }
+    }
+
+    #[inline]
+    pub fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let l_hs = self.state_hs_l.process(left, &self.high_shelf_coeffs);
+        let l_k = self.state_rlb_l.process(l_hs, &self.rlb_coeffs);
+        let r_hs = self.state_hs_r.process(right, &self.high_shelf_coeffs);
+        let r_k = self.state_rlb_r.process(r_hs, &self.rlb_coeffs);
+        (l_k, r_k)
+    }
+
+    #[inline]
+    pub fn process_mono(&mut self, mono: f32) -> f32 {
+        let m_hs = self.state_hs_l.process(mono, &self.high_shelf_coeffs);
+        self.state_rlb_l.process(m_hs, &self.rlb_coeffs)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoudnessNormalizer {
+    k_filter: KWeightingFilter,
+    power_ema: f32,
+    alpha_power: f32,
+    current_gain: f32,
+    target_gain: f32,
+    alpha_attack: f32,
+    alpha_release: f32,
+    sample_counter: usize,
+}
+
+impl LoudnessNormalizer {
+    pub fn new(sample_rate: f32, target_lufs: f32) -> Self {
+        let sr = sample_rate.max(8000.0);
+        // Short-term loudness time constant ~ 1.5 seconds
+        let tau_power = 1.5_f32;
+        let alpha_power = 1.0 - (-1.0 / (tau_power * sr)).exp();
+
+        // Fast attack (~100 ms) to pull back gain quickly on louder sections
+        let tau_attack = 0.10_f32;
+        let alpha_attack = 1.0 - (-1.0 / (tau_attack * sr)).exp();
+
+        // Slow release (~2.0 s) to prevent breathing/pumping on quiet passages
+        let tau_release = 2.0_f32;
+        let alpha_release = 1.0 - (-1.0 / (tau_release * sr)).exp();
+
+        // Initialize power to nominal target level so playback starts at unity gain (0 dB)
+        let nominal_power = 10.0_f32.powf((target_lufs + 0.691) / 10.0).max(1.0e-5);
+
+        Self {
+            k_filter: KWeightingFilter::new(sr),
+            power_ema: nominal_power,
+            alpha_power,
+            current_gain: 1.0,
+            target_gain: 1.0,
+            alpha_attack,
+            alpha_release,
+            sample_counter: 0,
+        }
+    }
+
+    #[inline]
+    pub fn process_stereo(&mut self, left: f32, right: f32, target_lufs: f32) -> (f32, f32) {
+        let (k_l, k_r) = self.k_filter.process_stereo(left, right);
+        let frame_power = 0.5 * (k_l * k_l + k_r * k_r);
+
+        self.power_ema += self.alpha_power * (frame_power - self.power_ema);
+
+        self.sample_counter += 1;
+        if self.sample_counter >= 64 {
+            self.sample_counter = 0;
+            self.update_target_gain(target_lufs);
+        }
+
+        let alpha = if self.target_gain < self.current_gain {
+            self.alpha_attack
+        } else {
+            self.alpha_release
+        };
+        self.current_gain += alpha * (self.target_gain - self.current_gain);
+
+        (left * self.current_gain, right * self.current_gain)
+    }
+
+    #[inline]
+    pub fn process_mono(&mut self, mono: f32, target_lufs: f32) -> f32 {
+        let k_m = self.k_filter.process_mono(mono);
+        let frame_power = k_m * k_m;
+
+        self.power_ema += self.alpha_power * (frame_power - self.power_ema);
+
+        self.sample_counter += 1;
+        if self.sample_counter >= 64 {
+            self.sample_counter = 0;
+            self.update_target_gain(target_lufs);
+        }
+
+        let alpha = if self.target_gain < self.current_gain {
+            self.alpha_attack
+        } else {
+            self.alpha_release
+        };
+        self.current_gain += alpha * (self.target_gain - self.current_gain);
+
+        mono * self.current_gain
+    }
+
+    fn update_target_gain(&mut self, target_lufs: f32) {
+        // Silence gate: EBU R128 specifies absolute threshold at -70 LUFS (~1.0e-7 power)
+        const SILENCE_POWER_THRESHOLD: f32 = 1.0e-7;
+
+        if self.power_ema <= SILENCE_POWER_THRESHOLD {
+            // Signal is in a quiet pause, intro, or interlude.
+            // Freeze target gain to avoid amplifying noise floor.
+            self.target_gain = self.target_gain.min(1.0);
+            return;
+        }
+
+        let measured_lufs = -0.691 + 10.0 * self.power_ema.log10();
+        let diff_db = target_lufs - measured_lufs;
+
+        // Clamp makeup gain: max +12.0 dB boost, down to -16.0 dB attenuation
+        let clamped_diff_db = diff_db.clamp(-16.0, 12.0);
+        self.target_gain = 10.0_f32.powf(clamped_diff_db / 20.0);
+    }
+}
+
 pub struct DspFilterSource<I> {
     input: I,
     sample_rate: rodio::SampleRate,
@@ -540,6 +728,7 @@ pub struct DspFilterSource<I> {
     crossfeed_state: CrossfeedState,
     reverb: StereoFreeverb,
     pitch_shifter: StereoPitchShifter,
+    loudness_normalizer: LoudnessNormalizer,
     pending_sample: Option<f32>,
     current_mono_channel: usize,
     samples_since_check: usize,
@@ -571,6 +760,7 @@ where
         let states = vec![vec![ChannelFilterState::default(); num_filters]; ch_count.max(2)];
         let reverb = StereoFreeverb::new(sr_f32);
         let pitch_shifter = StereoPitchShifter::new(2048);
+        let loudness_normalizer = LoudnessNormalizer::new(sr_f32, active_config.target_lufs);
 
         Self {
             input,
@@ -587,6 +777,7 @@ where
             crossfeed_state: CrossfeedState::default(),
             reverb,
             pitch_shifter,
+            loudness_normalizer,
             pending_sample: None,
             current_mono_channel: 0,
             samples_since_check: 0,
@@ -715,6 +906,16 @@ where
                 right = ps_r;
             }
 
+            if self.active_config.loudness_normalization {
+                let (norm_l, norm_r) = self.loudness_normalizer.process_stereo(
+                    left,
+                    right,
+                    self.active_config.target_lufs,
+                );
+                left = norm_l;
+                right = norm_r;
+            }
+
             if self.active_config.limiter {
                 left = apply_soft_limiter(left);
                 right = apply_soft_limiter(right);
@@ -750,6 +951,13 @@ where
                     self.pitch_shifter
                         .process(out, out, self.active_config.pitch_shift);
                 out = ps_out;
+            }
+
+            if self.active_config.loudness_normalization {
+                out = self.loudness_normalizer.process_mono(
+                    out,
+                    self.active_config.target_lufs,
+                );
             }
 
             if self.active_config.limiter {

@@ -76,6 +76,8 @@ impl AudioEngine {
                             || url.contains("encrypted")
                             || url.contains(".m4s")
                         {
+                            let short_url = sanitize_url_for_log(&url);
+                            eprintln!("[rustcloud-audio] Rejecting encrypted/unsupported stream gen#{generation}: {short_url}");
                             let _ = worker_tx.send(AudioCommand::StreamFailed {
                                 generation,
                                 error:
@@ -92,6 +94,7 @@ impl AudioEngine {
                             == Some(clean_new_url);
 
                         if same_media {
+                            println!("[rustcloud-audio] Replaying existing loaded track gen#{generation} (start: {:?})", start_secs);
                             if let Some(ref player) = current_player {
                                 if let Some(secs) = start_secs {
                                     let dur = Duration::from_secs_f32(secs);
@@ -142,6 +145,10 @@ impl AudioEngine {
                                         None
                                     },
                                 ) {
+                                    println!(
+                                        "[rustcloud-audio] Resolved direct media URL gen#{generation}: {}",
+                                        sanitize_url_for_log(&direct)
+                                    );
                                     download_url = direct;
                                 }
                             }
@@ -159,6 +166,7 @@ impl AudioEngine {
                                     });
                                 }
                                 Err(err) => {
+                                    eprintln!("[rustcloud-audio] Stream download failed gen#{generation}: {err}");
                                     let _ = tx_clone.send(AudioCommand::StreamFailed {
                                         generation,
                                         error: err,
@@ -174,6 +182,7 @@ impl AudioEngine {
                         start_secs,
                     } => {
                         if generation != current_generation {
+                            println!("[rustcloud-audio] Discarding stale StreamLoaded gen#{generation} (current: {current_generation})");
                             continue;
                         }
 
@@ -185,6 +194,7 @@ impl AudioEngine {
                                     sink_handle = Some(handle);
                                     sink_handle.as_ref().unwrap()
                                 } else {
+                                    eprintln!("[rustcloud-audio] Cannot play stream: audio sink unavailable");
                                     worker_status.store(ST_FAILED, Ordering::SeqCst);
                                     continue;
                                 }
@@ -212,7 +222,8 @@ impl AudioEngine {
                                 let mb = bytes.len() as f32 / (1024.0 * 1024.0);
                                 println!("[rustcloud-audio] Playback started gen#{generation} ({mb:.2} MB buffer)");
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                eprintln!("[rustcloud-audio] Failed to setup player gen#{generation}: {e}");
                                 worker_status.store(ST_FAILED, Ordering::SeqCst);
                             }
                         }
@@ -234,6 +245,10 @@ impl AudioEngine {
                                     last_seek_pos += last_seek_time.elapsed().as_secs_f32();
                                 }
                                 last_seek_time = Instant::now();
+                                println!(
+                                    "[rustcloud-audio] Paused at {:.2}s",
+                                    last_seek_pos.max(0.0)
+                                );
                             }
                         }
                     }
@@ -244,6 +259,7 @@ impl AudioEngine {
                             if player.is_paused() {
                                 player.play();
                                 last_seek_time = Instant::now();
+                                println!("[rustcloud-audio] Resumed");
                             }
                         }
                     }
@@ -258,9 +274,11 @@ impl AudioEngine {
                         is_paused = false;
                         last_seek_pos = -1.0;
                         worker_status.store(ST_IDLE, Ordering::SeqCst);
+                        println!("[rustcloud-audio] Stopped");
                     }
 
                     AudioCommand::Seek(seconds) => {
+                        println!("[rustcloud-audio] Seeking to {:.2}s", seconds);
                         last_seek_pos = seconds;
                         last_seek_time = Instant::now();
                         let target_seek = if seconds > 0.05 { Some(seconds) } else { None };
@@ -271,7 +289,7 @@ impl AudioEngine {
                                 if let (Some(ref bytes), Some(ref sink)) =
                                     (&current_bytes, &sink_handle)
                                 {
-                                    if let Ok(new_player) = setup_player(
+                                    match setup_player(
                                         sink,
                                         bytes,
                                         target_seek,
@@ -281,8 +299,14 @@ impl AudioEngine {
                                         worker_dsp_config.clone(),
                                         worker_dsp_version.clone(),
                                     ) {
-                                        player.stop();
-                                        current_player = Some(new_player);
+                                        Ok(new_player) => {
+                                            player.stop();
+                                            current_player = Some(new_player);
+                                            println!("[rustcloud-audio] try_seek fallback: recreated player at {:.2}s", seconds);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[rustcloud-audio] try_seek fallback player setup error: {e}");
+                                        }
                                     }
                                 }
                             }
@@ -311,6 +335,10 @@ impl AudioEngine {
                         device_name,
                         current_pos,
                     } => {
+                        println!(
+                            "[rustcloud-audio] Switching output device to: {:?}",
+                            device_name
+                        );
                         if let Some(new_handle) = open_sink_for_device(device_name.as_deref()) {
                             let target_pos = current_pos.unwrap_or_else(|| {
                                 if last_seek_pos >= 0.0 {
@@ -331,7 +359,7 @@ impl AudioEngine {
                                 } else {
                                     None
                                 };
-                                if let Ok(new_player) = setup_player(
+                                match setup_player(
                                     &new_handle,
                                     bytes,
                                     target_seek,
@@ -341,13 +369,23 @@ impl AudioEngine {
                                     worker_dsp_config.clone(),
                                     worker_dsp_version.clone(),
                                 ) {
-                                    if let Some(ref p) = current_player {
-                                        p.stop();
+                                    Ok(new_player) => {
+                                        if let Some(ref p) = current_player {
+                                            p.stop();
+                                        }
+                                        current_player = Some(new_player);
                                     }
-                                    current_player = Some(new_player);
+                                    Err(e) => {
+                                        eprintln!("[rustcloud-audio] Failed to setup player on device change: {e}");
+                                    }
                                 }
                             }
                             sink_handle = Some(new_handle);
+                        } else {
+                            eprintln!(
+                                "[rustcloud-audio] Failed to open sink for device: {:?}",
+                                device_name
+                            );
                         }
                     }
 
@@ -360,6 +398,7 @@ impl AudioEngine {
                                 0.0
                             };
                             if (pos - current_calc).abs() > 0.75 {
+                                println!("[rustcloud-audio] Syncing audio position to {:.2}s (calculated: {:.2}s)", pos, current_calc);
                                 last_seek_pos = pos;
                                 last_seek_time = Instant::now();
                             }
@@ -367,9 +406,12 @@ impl AudioEngine {
                     }
 
                     AudioCommand::UpdateDsp(cfg) => {
+                        let dsp_enabled = cfg.enabled;
+                        let norm_enabled = cfg.loudness_normalization;
                         if let Ok(mut dsp) = worker_dsp_config.write() {
                             *dsp = cfg;
-                            worker_dsp_version.fetch_add(1, Ordering::SeqCst);
+                            let v = worker_dsp_version.fetch_add(1, Ordering::SeqCst) + 1;
+                            println!("[rustcloud-audio] DSP config updated (ver #{v}, enabled: {dsp_enabled}, lufs norm: {norm_enabled})");
                         }
                     }
                 }
@@ -389,6 +431,7 @@ impl AudioEngine {
     }
 
     pub fn set_proxy_config(&self, enabled: bool, url: Option<String>) {
+        println!("[rustcloud-audio] set_proxy_config: enabled={enabled}, url={url:?}");
         if let Ok(mut cfg) = self.proxy_config.write() {
             cfg.enabled = enabled;
             cfg.url = url;
@@ -447,6 +490,11 @@ impl AudioEngine {
         start_secs: Option<f32>,
     ) -> Result<(), String> {
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        println!(
+            "[rustcloud-audio] play_url gen#{gen}: {} (start_secs: {:?})",
+            sanitize_url_for_log(&url),
+            start_secs
+        );
         if let Ok(tx) = self.tx.lock() {
             tx.send(AudioCommand::PlayUrl {
                 url,
@@ -456,6 +504,7 @@ impl AudioEngine {
             })
             .map_err(|e| e.to_string())
         } else {
+            eprintln!("[rustcloud-audio] play_url failed: audio channel locked");
             Err("audio channel locked".to_string())
         }
     }
@@ -563,6 +612,7 @@ impl AudioEngine {
                 if let Some(dev) = host.default_output_device() {
                     let name = get_device_name(&dev);
                     if !last_default.is_empty() && name != last_default {
+                        println!("[rustcloud-audio] Default output device changed ('{last_default}' -> '{name}'), updating sink");
                         if let Ok(tx) = engine.tx.lock() {
                             let _ = tx.send(AudioCommand::SetOutputDevice {
                                 device_name: None,

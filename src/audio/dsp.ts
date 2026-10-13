@@ -26,6 +26,8 @@ export interface DspConfig {
   reverbSize: number;
   reverbDamp: number;
   limiter: boolean;
+  loudnessNormalization: boolean;
+  targetLufs: number;
   playbackSpeed: number;
   pitchShift: number;
 }
@@ -43,6 +45,8 @@ export interface DspPreset {
   reverbSize?: number;
   reverbDamp?: number;
   limiter?: boolean;
+  loudnessNormalization?: boolean;
+  targetLufs?: number;
   playbackSpeed?: number;
   pitchShift?: number;
 }
@@ -70,6 +74,8 @@ export const DSP_PRESETS: Record<string, DspPreset> = {
     clarity: 0,
     reverbWet: 0,
     limiter: true,
+    loudnessNormalization: false,
+    targetLufs: -14,
     playbackSpeed: 1.0,
     pitchShift: 0,
   },
@@ -208,6 +214,8 @@ const DEFAULT_CONFIG: DspConfig = {
   reverbSize: 50,
   reverbDamp: 40,
   limiter: true,
+  loudnessNormalization: false,
+  targetLufs: -14,
   playbackSpeed: 1.0,
   pitchShift: 0.0,
 };
@@ -230,6 +238,9 @@ export function loadDspConfig(): DspConfig {
           ? (parsed.enabled ?? DEFAULT_CONFIG.enabled)
           : false,
         bands: { ...DEFAULT_CONFIG.bands, ...(parsed.bands || {}) },
+        loudnessNormalization:
+          parsed.loudnessNormalization ?? DEFAULT_CONFIG.loudnessNormalization,
+        targetLufs: parsed.targetLufs ?? DEFAULT_CONFIG.targetLufs,
       };
     }
   } catch (e) {
