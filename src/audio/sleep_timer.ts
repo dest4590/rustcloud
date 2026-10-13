@@ -64,9 +64,8 @@ function setVolumeAll(vol: number): void {
   const clamped = Math.max(0, Math.min(1.0, vol));
   invoke("rust_set_volume", { volume: clamped }).catch(() => {});
   try {
-    const cubed = Math.pow(clamped, 3);
     document.querySelectorAll("audio, video").forEach((el) => {
-      (el as HTMLMediaElement).volume = cubed;
+      (el as HTMLMediaElement).volume = clamped;
     });
   } catch {}
 }
@@ -84,8 +83,7 @@ export function startSleepTimer(mode: SleepTimerMode): void {
 
   try {
     const audioEl = document.querySelector("audio") as HTMLMediaElement | null;
-    const raw = audioEl && audioEl.volume > 0 ? audioEl.volume : 1.0;
-    originalVolume = raw > 0 && raw <= 1.0 ? Math.cbrt(raw) : raw;
+    originalVolume = audioEl && audioEl.volume > 0 ? audioEl.volume : 1.0;
   } catch {
     originalVolume = 1.0;
   }

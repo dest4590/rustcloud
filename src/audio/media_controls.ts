@@ -35,8 +35,7 @@ export function getVolume(): number {
   const audios = document.querySelectorAll<HTMLMediaElement>("audio");
   for (const el of audios) {
     if (el.duration && !isNaN(el.duration)) {
-      const v = el.volume;
-      return v > 0 && v <= 1 ? Math.cbrt(v) : v;
+      return el.volume;
     }
   }
   return cachedVolume;
@@ -45,11 +44,10 @@ export function getVolume(): number {
 export function setVolume(vol: number): void {
   const clamped = Math.max(0, Math.min(1.0, vol));
   cachedVolume = clamped;
-  const cubed = Math.pow(clamped, 3);
   const audios = document.querySelectorAll<HTMLMediaElement>("audio");
   for (const el of audios) {
     try {
-      el.volume = cubed;
+      el.volume = clamped;
     } catch {}
   }
   onMediaVolume(clamped);
