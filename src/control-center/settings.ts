@@ -9,6 +9,7 @@ export interface SettingsState {
   showDownloadBtn: boolean;
   showCopyLinkBtn: boolean;
   rustAudio: boolean;
+  overlapFade: boolean;
   trackbarLyrics: boolean;
 }
 
@@ -18,6 +19,7 @@ export const SETTING_KEYS = {
   SHOW_DOWNLOAD_BTN: "rustcloud-show-download-btn",
   SHOW_COPY_LINK_BTN: "rustcloud-show-copy-link-btn",
   RUST_AUDIO: "rustcloud-rust-audio-enabled",
+  OVERLAP_FADE: "rustcloud-overlap-fade-enabled",
   TRACKBAR_LYRICS: "rustcloud-trackbar-lyrics-enabled",
   OUTPUT_DEVICE: "rustcloud-output-device",
   SMTC: "rustcloud-smtc-enabled",

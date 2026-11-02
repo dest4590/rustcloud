@@ -549,8 +549,6 @@ impl KWeightingFilter {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate.max(8000.0);
 
-        // Stage 1: High shelf filter (head model) - ITU-R BS.1770
-        // f0 = 1681.9744509555319 Hz, gain = 3.99984385397 dB
         let f0_hs = 1681.97445;
         let v_h = 10.0_f32.powf(3.99984385 / 20.0);
         let omega_hs = 2.0 * PI * f0_hs / sr;
@@ -564,8 +562,6 @@ impl KWeightingFilter {
             a2: (1.0 - (2.0_f32).sqrt() * k_hs + k_hs * k_hs) / a0_hs,
         };
 
-        // Stage 2: RLB weighting high-pass filter - ITU-R BS.1770
-        // f0 = 38.13547087602444 Hz, Q = 0.50032703732539
         let f0_rlb = 38.13547;
         let q_rlb = 0.500327;
         let omega_rlb = 2.0 * PI * f0_rlb / sr;
@@ -620,19 +616,15 @@ pub struct LoudnessNormalizer {
 impl LoudnessNormalizer {
     pub fn new(sample_rate: f32, target_lufs: f32) -> Self {
         let sr = sample_rate.max(8000.0);
-        // Short-term loudness time constant ~ 1.5 seconds
         let tau_power = 1.5_f32;
         let alpha_power = 1.0 - (-1.0 / (tau_power * sr)).exp();
 
-        // Fast attack (~100 ms) to pull back gain quickly on louder sections
         let tau_attack = 0.10_f32;
         let alpha_attack = 1.0 - (-1.0 / (tau_attack * sr)).exp();
 
-        // Slow release (~2.0 s) to prevent breathing/pumping on quiet passages
         let tau_release = 2.0_f32;
         let alpha_release = 1.0 - (-1.0 / (tau_release * sr)).exp();
 
-        // Initialize power to nominal target level so playback starts at unity gain (0 dB)
         let nominal_power = 10.0_f32.powf((target_lufs + 0.691) / 10.0).max(1.0e-5);
 
         Self {
@@ -694,12 +686,9 @@ impl LoudnessNormalizer {
     }
 
     fn update_target_gain(&mut self, target_lufs: f32) {
-        // Silence gate: EBU R128 specifies absolute threshold at -70 LUFS (~1.0e-7 power)
         const SILENCE_POWER_THRESHOLD: f32 = 1.0e-7;
 
         if self.power_ema <= SILENCE_POWER_THRESHOLD {
-            // Signal is in a quiet pause, intro, or interlude.
-            // Freeze target gain to avoid amplifying noise floor.
             self.target_gain = self.target_gain.min(1.0);
             return;
         }
@@ -707,7 +696,6 @@ impl LoudnessNormalizer {
         let measured_lufs = -0.691 + 10.0 * self.power_ema.log10();
         let diff_db = target_lufs - measured_lufs;
 
-        // Clamp makeup gain: max +12.0 dB boost, down to -16.0 dB attenuation
         let clamped_diff_db = diff_db.clamp(-16.0, 12.0);
         self.target_gain = 10.0_f32.powf(clamped_diff_db / 20.0);
     }
@@ -954,10 +942,9 @@ where
             }
 
             if self.active_config.loudness_normalization {
-                out = self.loudness_normalizer.process_mono(
-                    out,
-                    self.active_config.target_lufs,
-                );
+                out = self
+                    .loudness_normalizer
+                    .process_mono(out, self.active_config.target_lufs);
             }
 
             if self.active_config.limiter {

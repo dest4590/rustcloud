@@ -2,6 +2,7 @@ mod audio;
 mod commands;
 mod discord;
 mod dsp;
+mod logging;
 mod smtc;
 mod tray;
 
@@ -162,6 +163,15 @@ Plugin Details:
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(err) = logging::init_logger() {
+        eprintln!("[rustcloud] failed to initialize file logger: {err}");
+    }
+
+    log::info!("[rustcloud] logger initialized; level={} file={}",
+        logging::log_level_name(),
+        logging::log_path().display()
+    );
+
     let discord_state = Arc::new(DiscordRpcState::new());
     let audio_engine = Arc::new(AudioEngine::new());
 
@@ -179,11 +189,15 @@ pub fn run() {
             commands::discord::track_changed,
             commands::download::save_audio_file,
             commands::audio::rust_play_stream,
+            commands::audio::rust_preload_stream,
+            commands::audio::rust_play_stream_overlap,
             commands::audio::rust_pause_stream,
             commands::audio::rust_resume_stream,
             commands::audio::rust_stop_stream,
             commands::audio::rust_seek_stream,
             commands::audio::rust_set_volume,
+            commands::audio::rust_set_overlap_volume,
+            commands::audio::rust_finalize_overlap,
             commands::audio::rust_set_playback_speed,
             commands::audio::rust_set_dsp_config,
             commands::audio::get_audio_output_devices,

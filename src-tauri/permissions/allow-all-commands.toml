@@ -5,6 +5,7 @@ commands.allow = [
   "track_changed",
   "save_audio_file",
   "rust_play_stream",
+  "rust_preload_stream",
   "rust_pause_stream",
   "rust_resume_stream",
   "rust_stop_stream",

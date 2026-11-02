@@ -40,6 +40,17 @@ pub enum AudioCommand {
         start_secs: Option<f32>,
         generation: u64,
     },
+    PreloadUrl {
+        url: String,
+        auth_header: Option<String>,
+        generation: u64,
+    },
+    PlayUrlOverlap {
+        url: String,
+        auth_header: Option<String>,
+        start_secs: Option<f32>,
+        generation: u64,
+    },
     StreamLoaded {
         generation: u64,
         bytes: std::sync::Arc<Vec<u8>>,
@@ -49,11 +60,18 @@ pub enum AudioCommand {
         generation: u64,
         error: String,
     },
+    StreamPreloaded {
+        generation: u64,
+        url: String,
+        bytes: std::sync::Arc<Vec<u8>>,
+    },
     Pause,
     Resume,
     Stop,
     Seek(f32),
     SetVolume(f32),
+    SetOverlapVolume(f32),
+    FinalizeOverlap,
     SetPlaybackSpeed(f32),
     SetOutputDevice {
         device_name: Option<String>,

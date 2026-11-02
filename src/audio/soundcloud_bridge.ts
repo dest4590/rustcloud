@@ -184,6 +184,46 @@ export function getGlobalPlayManager(): PlayManager | null {
   return playManagerInstance;
 }
 
+function isTrackPermalink(url: string): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url, "https://soundcloud.com");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const reservedRoot = [
+      "discover",
+      "stream",
+      "feed",
+      "you",
+      "upload",
+      "search",
+      "charts",
+      "undefined",
+    ];
+    const reservedSecond = [
+      "likes",
+      "reposts",
+      "sets",
+      "tracks",
+      "albums",
+      "spotlight",
+      "popular-tracks",
+    ];
+
+    const validShape =
+      parts.length === 2 ||
+      (parts.length === 3 && parts[2].toLowerCase().startsWith("s-"));
+
+    return (
+      validShape &&
+      !reservedRoot.includes(parts[0]) &&
+      !reservedSecond.includes((parts[1] || "").toLowerCase()) &&
+      !parts.some((p) => p === "undefined")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function soundModelToTrackInfo(
   sound: SoundModel | null,
   isPlaying = false,
@@ -218,6 +258,10 @@ export function soundModelToTrackInfo(
     } catch {
       trackUrl = trackUrl.split("?")[0].replace(/\/+$/, "");
     }
+  }
+
+  if (!isTrackPermalink(trackUrl)) {
+    return null;
   }
 
   const durationMs = attrs.duration || (sound.get?.("duration") as number) || 0;

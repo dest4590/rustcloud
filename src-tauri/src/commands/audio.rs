@@ -15,6 +15,25 @@ pub fn rust_play_stream(
 }
 
 #[tauri::command]
+pub fn rust_preload_stream(
+    url: String,
+    auth_header: Option<String>,
+    audio: State<'_, Arc<AudioEngine>>,
+) -> Result<(), String> {
+    audio.preload_url(url, auth_header)
+}
+
+#[tauri::command]
+pub fn rust_play_stream_overlap(
+    url: String,
+    auth_header: Option<String>,
+    start_secs: Option<f32>,
+    audio: State<'_, Arc<AudioEngine>>,
+) -> Result<(), String> {
+    audio.play_url_overlap(url, auth_header, start_secs)
+}
+
+#[tauri::command]
 pub fn rust_pause_stream(audio: State<'_, Arc<AudioEngine>>, smtc: State<'_, Arc<SmtcManager>>) {
     audio.pause();
     smtc.set_playback_status(false);
@@ -40,6 +59,16 @@ pub fn rust_seek_stream(seconds: f32, audio: State<'_, Arc<AudioEngine>>) {
 #[tauri::command]
 pub fn rust_set_volume(volume: f32, audio: State<'_, Arc<AudioEngine>>) {
     audio.set_volume(volume);
+}
+
+#[tauri::command]
+pub fn rust_set_overlap_volume(volume: f32, audio: State<'_, Arc<AudioEngine>>) {
+    audio.set_overlap_volume(volume);
+}
+
+#[tauri::command]
+pub fn rust_finalize_overlap(audio: State<'_, Arc<AudioEngine>>) {
+    audio.finalize_overlap();
 }
 
 #[tauri::command]

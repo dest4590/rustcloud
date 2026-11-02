@@ -157,7 +157,6 @@ impl DiscordRpcState {
 
         assets = assets.small_image(if track.is_playing { "play" } else { "pause" });
         activity = activity.assets(assets);
-
         if !track.track_url.is_empty() {
             activity =
                 activity.buttons(vec![Button::new("Listen on SoundCloud", &track.track_url)]);

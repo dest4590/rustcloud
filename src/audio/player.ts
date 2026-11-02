@@ -85,7 +85,6 @@ function extractArtist(artistElem: HTMLElement | null): string {
 }
 
 let lastTrack: TrackInfo | null = null;
-let lastSyncTime = 0;
 let isApplyingDomSync = false;
 
 export function applyPlaybackUIState(playing: boolean): void {
@@ -167,18 +166,34 @@ export function extractTrackInfo(): TrackInfo | null {
     try {
       const u = new URL(href, "https://soundcloud.com");
       const parts = u.pathname.split("/").filter(Boolean);
+      const reservedRoot = [
+        "discover",
+        "stream",
+        "feed",
+        "you",
+        "upload",
+        "search",
+        "charts",
+        "undefined",
+      ];
+      const reservedSecond = [
+        "likes",
+        "reposts",
+        "sets",
+        "tracks",
+        "albums",
+        "spotlight",
+        "popular-tracks",
+      ];
+
+      const validShape =
+        parts.length === 2 ||
+        (parts.length === 3 && parts[2].toLowerCase().startsWith("s-"));
+
       return (
-        parts.length >= 2 &&
-        ![
-          "discover",
-          "stream",
-          "feed",
-          "you",
-          "upload",
-          "search",
-          "charts",
-          "undefined",
-        ].includes(parts[0]) &&
+        validShape &&
+        !reservedRoot.includes(parts[0]) &&
+        !reservedSecond.includes((parts[1] || "").toLowerCase()) &&
         !parts.some((p) => p === "undefined")
       );
     } catch {
@@ -393,8 +408,19 @@ let userWantsPlayback = false;
 let trackSwitchEpoch = 0;
 let lastTrackSwitchTime = 0;
 
+const NEAR_END_PRELOAD_SECONDS = 12;
+
+let pendingNextTrack: TrackInfo | null = null;
+let pendingNextStream: { streamUrl: string; authHeader?: string } | null = null;
+let nextTrackPreloadEpoch = 0;
+let nextTrackPreloadRetryAt = 0;
+let nextTrackPreloadFailures = 0;
+let fadeVolumeTimer: number | null = null;
+
 let playPauseDebounceTimer: number | null = null;
 let pendingDesiredPlaying: boolean | null = null;
+let hookPlayPauseTimer: number | null = null;
+let pendingHookPlayState: boolean | null = null;
 
 let seekDebounceTimer: number | null = null;
 let pendingSeekSeconds: number | null = null;
@@ -402,6 +428,7 @@ let pendingSeekSeconds: number | null = null;
 let volumeThrottleTimer: number | null = null;
 let pendingVolume: number | null = null;
 let lastSentVolume = -1;
+let userVolumePreference = 1;
 
 export function isRustAudioActive(): boolean {
   return (
@@ -416,15 +443,24 @@ let lastRetryAt = 0;
 let rustPlaybackFailed = false;
 
 function cancelDebounceTimers(): void {
+  if (fadeVolumeTimer !== null) {
+    window.clearInterval(fadeVolumeTimer);
+    fadeVolumeTimer = null;
+  }
   if (playPauseDebounceTimer !== null) {
     window.clearTimeout(playPauseDebounceTimer);
     playPauseDebounceTimer = null;
+  }
+  if (hookPlayPauseTimer !== null) {
+    window.clearTimeout(hookPlayPauseTimer);
+    hookPlayPauseTimer = null;
   }
   if (seekDebounceTimer !== null) {
     window.clearTimeout(seekDebounceTimer);
     seekDebounceTimer = null;
   }
   pendingDesiredPlaying = null;
+  pendingHookPlayState = null;
   pendingSeekSeconds = null;
 }
 
@@ -440,6 +476,71 @@ function resetRustState(): void {
   isRustPlaying = false;
   userWantsPlayback = false;
   applyPlaybackUIState(false);
+}
+
+function scheduleHookPlayState(shouldPlay: boolean): void {
+  pendingHookPlayState = shouldPlay;
+  if (hookPlayPauseTimer !== null) {
+    window.clearTimeout(hookPlayPauseTimer);
+  }
+
+  hookPlayPauseTimer = window.setTimeout(() => {
+    hookPlayPauseTimer = null;
+    const requested = pendingHookPlayState;
+    pendingHookPlayState = null;
+    if (requested === null) return;
+
+    const pm = getGlobalPlayManager();
+    const pmPlaying = pm?.isPlaying?.();
+    const domTrack = extractTrackInfo();
+    const effectivePlaying =
+      typeof pmPlaying === "boolean"
+        ? pmPlaying
+        : (domTrack?.isPlaying ?? requested);
+
+    if (requested && !effectivePlaying) return;
+    if (!requested && effectivePlaying) return;
+
+    if (requested) {
+      userWantsPlayback = true;
+      applyPlaybackUIState(true);
+      silenceWebviewAudio();
+
+      const current = getCurrentTrack() || domTrack || lastTrack;
+      if (!current) return;
+      current.isPlaying = true;
+
+      const isNew = Boolean(
+        current.trackUrl &&
+        (!currentTrackUrl ||
+          !isSameTrackUrl(current.trackUrl, currentTrackUrl)),
+      );
+
+      if (isNew || !activeStreamUrl) {
+        if (canStartPlaybackForTrack(current)) {
+          startTrackPlayback(current);
+        }
+        return;
+      }
+
+      if (
+        activeStreamUrl &&
+        isSameTrackUrl(current.trackUrl, currentTrackUrl)
+      ) {
+        queuePlaybackState(true);
+        return;
+      }
+      return;
+    }
+
+    if (resolvingTrackUrl || Date.now() - lastTrackSwitchTime < 800) {
+      return;
+    }
+
+    userWantsPlayback = false;
+    applyPlaybackUIState(false);
+    queuePlaybackState(false);
+  }, 80);
 }
 
 export function onSecondaryStart(el: HTMLMediaElement): void {
@@ -561,28 +662,291 @@ function queuePlaybackState(shouldPlay: boolean): void {
         err,
       );
     });
-  }, 75);
+  }, 60);
+}
+
+function getVolumeTarget(): number {
+  return userVolumePreference;
+}
+
+function setEngineVolume(volume: number, rememberUserVolume = true): void {
+  const clamped = Math.max(0, Math.min(2, volume));
+  if (rememberUserVolume) {
+    userVolumePreference = clamped;
+  }
+  lastSentVolume = clamped;
+  invoke("rust_set_volume", { volume: clamped }).catch(() => {});
+}
+
+function normalizeTrackUrl(raw: string): string {
+  if (!raw) return "";
+  try {
+    const u = new URL(raw, "https://soundcloud.com");
+    if (!u.hostname.includes("soundcloud")) return "";
+    return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return raw.replace(/\?.*$/, "").replace(/\/+$/, "");
+  }
+}
+
+function isSameTrackUrl(a: string, b: string): boolean {
+  const left = normalizeTrackUrl(a);
+  const right = normalizeTrackUrl(b);
+  return Boolean(left && right && left === right);
+}
+
+function emitTrackChanged(track: TrackInfo): Promise<void> {
+  return invoke("track_changed", {
+    track: { ...track, position: Math.floor(track.position) },
+  })
+    .then(() => {})
+    .catch(() => {});
+}
+
+function canStartPlaybackForTrack(track: TrackInfo): boolean {
+  return (
+    !rustPlaybackFailed &&
+    !isNativeDrmFallbackActive() &&
+    !isSameTrackUrl(resolvingTrackUrl, track.trackUrl)
+  );
+}
+
+function normalizeQueueEntry(entry: unknown): TrackInfo | null {
+  if (!entry || typeof entry !== "object") return null;
+
+  const candidate =
+    (entry as { sound?: unknown; track?: unknown; value?: unknown })?.sound ??
+    (entry as { sound?: unknown; track?: unknown; value?: unknown })?.track ??
+    (entry as { sound?: unknown; track?: unknown; value?: unknown })?.value ??
+    entry;
+
+  if (candidate && typeof candidate === "object") {
+    const info = soundModelToTrackInfo(candidate as any, false);
+    if (info) return info;
+  }
+
+  const candidateAny = entry as {
+    permalink_url?: string;
+    trackUrl?: string;
+    title?: string;
+    artist?: string;
+    artworkUrl?: string;
+    duration?: number;
+    attributes?: {
+      permalink_url?: string;
+      title?: string;
+      user?: { username?: string };
+    };
+  };
+
+  const permalinkUrl =
+    candidateAny.permalink_url ||
+    candidateAny.trackUrl ||
+    candidateAny.attributes?.permalink_url ||
+    "";
+
+  const title = candidateAny.title || candidateAny.attributes?.title || "";
+  const artist =
+    candidateAny.artist ||
+    candidateAny.attributes?.user?.username ||
+    "SoundCloud";
+
+  if (!permalinkUrl && !title) return null;
+
+  const normalizedUrl = permalinkUrl
+    ? permalinkUrl.replace(/\?.*$/, "").replace(/\/+$/, "")
+    : "";
+
+  return {
+    title: title || "Queued track",
+    artist,
+    artworkUrl: candidateAny.artworkUrl || "",
+    trackUrl: normalizedUrl,
+    isPlaying: false,
+    position: 0,
+    duration: candidateAny.duration || 0,
+  };
+}
+
+function findNextQueuedTrack(currentTrack: TrackInfo): TrackInfo | null {
+  const pm = getGlobalPlayManager() as any;
+  const queueSources: unknown[] = [];
+  for (const source of [
+    pm?.getQueue?.(),
+    pm?.getQueueItems?.(),
+    pm?.queue,
+    pm?.playQueue,
+    pm?.currentQueue,
+    pm?.queue?.items,
+    pm?.queue?.list,
+    pm?.queue?.collection,
+    pm?.queue?.tracks,
+  ]) {
+    if (source) queueSources.push(source);
+  }
+
+  for (const source of queueSources) {
+    const queue = Array.isArray(source)
+      ? source
+      : source && typeof source === "object"
+        ? ((source as any).items ??
+          (source as any).sounds ??
+          (source as any).tracks ??
+          (source as any).list ??
+          (source as any).collection ??
+          [])
+        : [];
+
+    if (!Array.isArray(queue)) continue;
+    const currentIndex = queue.findIndex((entry) => {
+      const track = normalizeQueueEntry(entry);
+      return (
+        !!track &&
+        !!track.trackUrl &&
+        isSameTrackUrl(track.trackUrl, currentTrack.trackUrl)
+      );
+    });
+
+    if (currentIndex >= 0 && currentIndex < queue.length - 1) {
+      const next = normalizeQueueEntry(queue[currentIndex + 1]);
+      if (next && next.trackUrl) return next;
+    }
+  }
+
+  const queueRoots = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      ".playQueue__list, .queue__list, [data-testid='queue']",
+    ),
+  );
+
+  for (const root of queueRoots) {
+    const links = Array.from(
+      root.querySelectorAll<HTMLAnchorElement>("a[href*='/']"),
+    );
+    const currentUrl = normalizeTrackUrl(currentTrack.trackUrl);
+    const currentIndex = links.findIndex(
+      (l) => normalizeTrackUrl(l.href) === currentUrl,
+    );
+    if (currentIndex >= 0 && currentIndex < links.length - 1) {
+      const nextLink = links[currentIndex + 1];
+      const nextUrl = normalizeTrackUrl(nextLink.href);
+      if (nextUrl && nextUrl !== currentUrl) {
+        return {
+          title: nextLink.textContent?.trim() || "Queued track",
+          artist: currentTrack.artist,
+          artworkUrl: "",
+          trackUrl: nextUrl,
+          isPlaying: false,
+          position: 0,
+          duration: 0,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+async function preloadNextTrack(currentTrack: TrackInfo): Promise<void> {
+  if (!isRustAudioActive() || !currentTrack.trackUrl) return;
+
+  const nextTrack = findNextQueuedTrack(currentTrack);
+  if (
+    !nextTrack ||
+    !nextTrack.trackUrl ||
+    isSameTrackUrl(nextTrack.trackUrl, currentTrack.trackUrl)
+  ) {
+    pendingNextTrack = null;
+    pendingNextStream = null;
+    nextTrackPreloadRetryAt = 0;
+    nextTrackPreloadFailures = 0;
+    return;
+  }
+
+  const now = Date.now();
+  const hasSamePending =
+    !!pendingNextTrack &&
+    isSameTrackUrl(pendingNextTrack.trackUrl, nextTrack.trackUrl);
+
+  if (hasSamePending && pendingNextStream) {
+    return;
+  }
+
+  if (hasSamePending && now < nextTrackPreloadRetryAt) {
+    return;
+  }
+
+  console.debug(
+    "[rustcloud-player] Preloading queued next track:",
+    currentTrack.title,
+    "->",
+    nextTrack.title,
+    nextTrack.trackUrl,
+  );
+
+  pendingNextTrack = nextTrack;
+  if (!hasSamePending) {
+    pendingNextStream = null;
+  }
+  nextTrackPreloadEpoch += 1;
+  const epoch = nextTrackPreloadEpoch;
+
+  try {
+    const resolved = await resolvePlayableStream(nextTrack.trackUrl);
+    if (epoch !== nextTrackPreloadEpoch) return;
+    if (!resolved || !resolved.streamUrl) {
+      pendingNextStream = null;
+      nextTrackPreloadFailures = Math.min(nextTrackPreloadFailures + 1, 6);
+      const backoff = Math.min(
+        4000,
+        500 * Math.pow(2, nextTrackPreloadFailures),
+      );
+      nextTrackPreloadRetryAt = Date.now() + backoff;
+      return;
+    }
+
+    nextTrackPreloadFailures = 0;
+    nextTrackPreloadRetryAt = Date.now() + 15000;
+    pendingNextStream = resolved;
+    invoke("rust_preload_stream", {
+      url: resolved.streamUrl,
+      authHeader: resolved.authHeader || getLatestAuthHeader() || null,
+    }).catch((err) => {
+      console.debug("[rustcloud-player] rust_preload_stream error:", err);
+    });
+  } catch {
+    pendingNextStream = null;
+    nextTrackPreloadFailures = Math.min(nextTrackPreloadFailures + 1, 6);
+    const backoff = Math.min(4000, 500 * Math.pow(2, nextTrackPreloadFailures));
+    nextTrackPreloadRetryAt = Date.now() + backoff;
+  }
 }
 
 async function startTrackPlayback(track: TrackInfo): Promise<void> {
   if (!isRustAudioActive() || !track.trackUrl) return;
   if (activeSecondary.size > 0) return;
 
-  const isNewTrack = track.trackUrl !== currentTrackUrl;
+  const targetTrackUrl = normalizeTrackUrl(track.trackUrl) || track.trackUrl;
+  const isNewTrack = !isSameTrackUrl(targetTrackUrl, currentTrackUrl);
+  const isPrefetchedNext =
+    !!pendingNextStream &&
+    !!pendingNextTrack &&
+    isSameTrackUrl(pendingNextTrack.trackUrl, targetTrackUrl);
 
   if (!isNewTrack) {
-    if (resolvingTrackUrl === track.trackUrl) return;
+    if (isSameTrackUrl(resolvingTrackUrl, targetTrackUrl)) return;
     if (rustPlaybackFailed || isNativeDrmFallbackActive()) return;
     if (activeStreamUrl) {
-      if (!isRustPlaying && track.isPlaying) {
+      if (!isRustPlaying && (track.isPlaying || userWantsPlayback)) {
         queuePlaybackState(true);
       }
       return;
     }
   }
 
+  cancelDebounceTimers();
+
   if (isNewTrack) {
-    cancelDebounceTimers();
     rustPlaybackFailed = false;
     setDrmFallbackActive(false);
     invoke("rust_stop_stream").catch(() => {});
@@ -592,17 +956,25 @@ async function startTrackPlayback(track: TrackInfo): Promise<void> {
 
   silenceWebviewAudio();
 
-  userWantsPlayback = track.isPlaying;
+  userWantsPlayback = true;
   const epoch = ++trackSwitchEpoch;
   lastTrackSwitchTime = Date.now();
-  currentTrackUrl = track.trackUrl;
-  resolvingTrackUrl = track.trackUrl;
+  currentTrackUrl = targetTrackUrl;
+  resolvingTrackUrl = targetTrackUrl;
   lastTrack = track;
 
-  applyPlaybackUIState(track.isPlaying);
+  applyPlaybackUIState(true);
+
+  setEngineVolume(getVolumeTarget(), false);
 
   try {
-    const resolved = await resolvePlayableStream(track.trackUrl);
+    const resolved = isPrefetchedNext
+      ? pendingNextStream
+      : await resolvePlayableStream(track.trackUrl);
+    if (isPrefetchedNext) {
+      pendingNextTrack = null;
+      pendingNextStream = null;
+    }
     if (epoch !== trackSwitchEpoch) return;
 
     if (!resolved || !resolved.streamUrl) {
@@ -616,18 +988,19 @@ async function startTrackPlayback(track: TrackInfo): Promise<void> {
 
     activeStreamUrl = resolved.streamUrl;
     const authHeader = resolved.authHeader || getLatestAuthHeader() || null;
+    const startSecs = track.position > 1 ? track.position : null;
 
     await invoke("rust_play_stream", {
       url: resolved.streamUrl,
       authHeader,
-      startSecs: track.position > 1 ? track.position : null,
+      startSecs,
     });
 
     const startWait = Date.now();
     while (epoch === trackSwitchEpoch && Date.now() - startWait < 15000) {
       const st = await invoke<number>("rust_audio_status").catch(() => 2);
       if (st === 2 || st === 3) break;
-      await new Promise((r) => window.setTimeout(r, 60));
+      await new Promise((r) => window.setTimeout(r, 50));
     }
 
     if (epoch === trackSwitchEpoch) {
@@ -651,7 +1024,6 @@ async function startTrackPlayback(track: TrackInfo): Promise<void> {
       }
 
       const shouldPlay = userWantsPlayback && activeSecondary.size === 0;
-
       isRustPlaying = shouldPlay;
       applyPlaybackUIState(shouldPlay);
 
@@ -685,19 +1057,7 @@ export function onMediaPlay(): void {
   ) {
     return;
   }
-  userWantsPlayback = true;
-  applyPlaybackUIState(true);
-  silenceWebviewAudio();
-
-  const current = extractTrackInfo() || lastTrack;
-  if (current) {
-    current.isPlaying = true;
-    if (current.trackUrl === currentTrackUrl && activeStreamUrl) {
-      queuePlaybackState(true);
-    } else if (resolvingTrackUrl !== current.trackUrl) {
-      startTrackPlayback(current);
-    }
-  }
+  scheduleHookPlayState(true);
 }
 
 export function onMediaPause(): void {
@@ -708,20 +1068,23 @@ export function onMediaPause(): void {
   ) {
     return;
   }
-
-  if (resolvingTrackUrl || Date.now() - lastTrackSwitchTime < 1000) {
-    return;
-  }
-
-  userWantsPlayback = false;
-  applyPlaybackUIState(false);
-  queuePlaybackState(false);
+  scheduleHookPlayState(false);
 }
 
 export function onMediaSeek(seconds: number): void {
   window.dispatchEvent(
     new CustomEvent("rustcloud:seek", { detail: { position: seconds } }),
   );
+
+  const seekTrack = extractTrackInfo() || lastTrack;
+  if (seekTrack && seekTrack.duration > 0 && seekTrack.trackUrl) {
+    const projectedTrack = { ...seekTrack, position: seconds };
+    const nearEnd =
+      seconds >= Math.max(0, seekTrack.duration - NEAR_END_PRELOAD_SECONDS);
+    if (nearEnd) {
+      preloadNextTrack(projectedTrack);
+    }
+  }
 
   if (
     !isRustAudioActive() ||
@@ -761,6 +1124,7 @@ export function onMediaVolume(volume: number): void {
   }
 
   const clamped = Math.max(0, Math.min(2, volume));
+  userVolumePreference = clamped;
   if (lastSentVolume >= 0 && Math.abs(clamped - lastSentVolume) < 0.005) {
     return;
   }
@@ -775,6 +1139,7 @@ export function onMediaVolume(volume: number): void {
     pendingVolume = null;
 
     lastSentVolume = target;
+    userVolumePreference = target;
     invoke("rust_set_volume", { volume: target }).catch(() => {});
   }, 35);
 }
@@ -840,24 +1205,32 @@ export function initPlayerSync(): void {
 
   initSoundCloudBridge(
     (track) => {
+      const isNew = Boolean(
+        track.trackUrl &&
+        (!currentTrackUrl || !isSameTrackUrl(track.trackUrl, currentTrackUrl)),
+      );
+
       lastTrack = track;
-      lastSyncTime = Date.now();
-      invoke("track_changed", {
-        track: { ...track, position: Math.floor(track.position) },
-      }).catch(() => {});
-      if (track.isPlaying) {
-        userWantsPlayback = true;
-        const isNew = Boolean(
-          track.trackUrl && track.trackUrl !== currentTrackUrl,
-        );
-        if (
-          isNew ||
-          (!activeStreamUrl &&
-            !rustPlaybackFailed &&
-            !isNativeDrmFallbackActive() &&
-            resolvingTrackUrl !== track.trackUrl)
-        ) {
+      emitTrackChanged(track);
+
+      if (isNew) {
+        userWantsPlayback = track.isPlaying;
+        if (track.isPlaying) {
           startTrackPlayback(track);
+        } else {
+          cancelDebounceTimers();
+          invoke("rust_stop_stream").catch(() => {});
+          activeStreamUrl = "";
+          currentTrackUrl = normalizeTrackUrl(track.trackUrl) || track.trackUrl;
+          isRustPlaying = false;
+          preloadNextTrack(track);
+        }
+      } else if (track.isPlaying) {
+        userWantsPlayback = true;
+        if (!activeStreamUrl && canStartPlaybackForTrack(track)) {
+          startTrackPlayback(track);
+        } else if (activeStreamUrl && !isRustPlaying) {
+          queuePlaybackState(true);
         }
       } else {
         userWantsPlayback = false;
@@ -867,12 +1240,26 @@ export function initPlayerSync(): void {
     (isPlaying) => {
       userWantsPlayback = isPlaying;
       applyPlaybackUIState(isPlaying);
-      if (lastTrack) {
-        lastTrack.isPlaying = isPlaying;
-        invoke("track_changed", {
-          track: { ...lastTrack, position: Math.floor(lastTrack.position) },
-        }).catch(() => {});
+
+      const cur = getCurrentTrack() || lastTrack;
+      if (cur) {
+        cur.isPlaying = isPlaying;
+        lastTrack = cur;
+        emitTrackChanged(cur);
+
+        if (isPlaying) {
+          const isNew = Boolean(
+            cur.trackUrl &&
+            (!currentTrackUrl ||
+              !isSameTrackUrl(cur.trackUrl, currentTrackUrl)),
+          );
+          if (isNew || !activeStreamUrl) {
+            startTrackPlayback(cur);
+            return;
+          }
+        }
       }
+
       queuePlaybackState(isPlaying);
     },
     (posSecs) => {
@@ -910,75 +1297,48 @@ export function initPlayerSync(): void {
         applyPlaybackUIState(isRustPlaying && userWantsPlayback);
       }
 
-      const trackChanged =
-        !lastTrack ||
-        track.title !== lastTrack.title ||
-        track.artist !== lastTrack.artist ||
-        (track.trackUrl &&
-          lastTrack.trackUrl &&
-          track.trackUrl !== lastTrack.trackUrl);
+      const isNewTrackUrl = Boolean(
+        track.trackUrl &&
+        (!currentTrackUrl || !isSameTrackUrl(track.trackUrl, currentTrackUrl)),
+      );
 
-      const playStateChanged =
-        lastTrack && track.isPlaying !== lastTrack.isPlaying;
+      if (
+        track.duration > 0 &&
+        track.position >= Math.max(0, track.duration - NEAR_END_PRELOAD_SECONDS)
+      ) {
+        preloadNextTrack(track);
+      }
 
-      const now = Date.now();
-      const elapsedWall = (now - lastSyncTime) / 1000;
-      const expectedPos = lastTrack?.isPlaying
-        ? lastTrack.position + elapsedWall
-        : (lastTrack?.position ?? 0);
-      const positionJumped =
-        lastTrack && Math.abs(track.position - expectedPos) > 3;
-
-      if (trackChanged || playStateChanged || positionJumped) {
+      if (isNewTrackUrl) {
         lastTrack = track;
-        lastSyncTime = now;
+        await emitTrackChanged(track);
 
-        await invoke("track_changed", {
-          track: { ...track, position: Math.floor(track.position) },
-        }).catch(() => {});
+        if (track.isPlaying || userWantsPlayback) {
+          userWantsPlayback = true;
+          startTrackPlayback(track);
+        }
+        return;
+      }
 
-        const isNewTrackUrl = Boolean(
-          track.trackUrl &&
-          (!currentTrackUrl || track.trackUrl !== currentTrackUrl),
-        );
+      const playStateChanged = Boolean(
+        lastTrack && track.isPlaying !== lastTrack.isPlaying,
+      );
+      if (playStateChanged) {
+        lastTrack = track;
+        await emitTrackChanged(track);
 
-        if (trackChanged) {
-          if (track.isPlaying) {
-            userWantsPlayback = true;
-            if (
-              isNewTrackUrl ||
-              (!activeStreamUrl &&
-                !rustPlaybackFailed &&
-                !isNativeDrmFallbackActive() &&
-                resolvingTrackUrl !== track.trackUrl)
-            ) {
-              startTrackPlayback(track);
-            }
-          } else if (isNewTrackUrl) {
-            userWantsPlayback = false;
-            cancelDebounceTimers();
-            rustPlaybackFailed = false;
-            setDrmFallbackActive(false);
-            invoke("rust_stop_stream").catch(() => {});
-            activeStreamUrl = "";
-            isRustPlaying = false;
-            applyPlaybackUIState(false);
+        userWantsPlayback = track.isPlaying;
+        if (track.isPlaying) {
+          if (
+            activeStreamUrl &&
+            isSameTrackUrl(track.trackUrl, currentTrackUrl)
+          ) {
+            queuePlaybackState(true);
+          } else if (canStartPlaybackForTrack(track)) {
+            startTrackPlayback(track);
           }
-        } else if (playStateChanged) {
-          userWantsPlayback = track.isPlaying;
-          if (track.isPlaying) {
-            if (activeStreamUrl && track.trackUrl === currentTrackUrl) {
-              queuePlaybackState(true);
-            } else if (
-              !rustPlaybackFailed &&
-              !isNativeDrmFallbackActive() &&
-              resolvingTrackUrl !== track.trackUrl
-            ) {
-              startTrackPlayback(track);
-            }
-          } else {
-            queuePlaybackState(false);
-          }
+        } else {
+          queuePlaybackState(false);
         }
       }
 
@@ -1006,7 +1366,7 @@ export function initPlayerSync(): void {
         } else if (
           !rustPlaybackFailed &&
           !isNativeDrmFallbackActive() &&
-          Date.now() - lastRetryAt > 4000
+          Date.now() - lastRetryAt > 3000
         ) {
           lastRetryAt = Date.now();
           startTrackPlayback(track);

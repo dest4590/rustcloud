@@ -31,9 +31,9 @@
       @update:model-value="onSave"
     />
     <SettingRow
-      title="rust native audio player"
-      desc="stream and play tracks directly using rust engine"
-      v-model="rustAudio"
+      title="crossfade between tracks"
+      desc="blend current track into the next queued track"
+      v-model="overlapFade"
       @update:model-value="onSave"
     />
 
@@ -241,7 +241,7 @@ const showCopyLinkBtn = ref(getBooleanSetting(SETTING_KEYS.SHOW_COPY_LINK_BTN));
 const trackbarLyrics = ref(
   getBooleanSetting(SETTING_KEYS.TRACKBAR_LYRICS, true),
 );
-const rustAudio = ref(getBooleanSetting(SETTING_KEYS.RUST_AUDIO, true));
+const overlapFade = ref(getBooleanSetting(SETTING_KEYS.OVERLAP_FADE, true));
 const proxyEnabled = ref(getBooleanSetting(SETTING_KEYS.PROXY_ENABLED, false));
 const proxyUrl = ref(getStringSetting(SETTING_KEYS.PROXY_URL, ""));
 const isTestingProxy = ref(false);
@@ -325,15 +325,15 @@ function onSave() {
   setBooleanSetting(SETTING_KEYS.SHOW_DOWNLOAD_BTN, showDownloadBtn.value);
   setBooleanSetting(SETTING_KEYS.SHOW_COPY_LINK_BTN, showCopyLinkBtn.value);
   setBooleanSetting(SETTING_KEYS.TRACKBAR_LYRICS, trackbarLyrics.value);
-  setBooleanSetting(SETTING_KEYS.RUST_AUDIO, rustAudio.value);
+  setBooleanSetting(SETTING_KEYS.OVERLAP_FADE, overlapFade.value);
 }
 
 function handleSettingChanged(e: Event) {
   const custom = e as CustomEvent<{ key: string; value: any }>;
   if (custom.detail?.key === SETTING_KEYS.DISCORD_RPC) {
     discordRpc.value = custom.detail.value;
-  } else if (custom.detail?.key === SETTING_KEYS.RUST_AUDIO) {
-    rustAudio.value = custom.detail.value;
+  } else if (custom.detail?.key === SETTING_KEYS.OVERLAP_FADE) {
+    overlapFade.value = custom.detail.value;
   } else if (custom.detail?.key === SETTING_KEYS.PROXY_ENABLED) {
     proxyEnabled.value = custom.detail.value;
   } else if (custom.detail?.key === SETTING_KEYS.PROXY_URL) {
@@ -342,6 +342,9 @@ function handleSettingChanged(e: Event) {
 }
 
 onMounted(() => {
+  if (!getBooleanSetting(SETTING_KEYS.RUST_AUDIO, true)) {
+    setBooleanSetting(SETTING_KEYS.RUST_AUDIO, true);
+  }
   window.addEventListener("rustcloud:setting-changed", handleSettingChanged);
   unbindSleepTimer = onSleepTimerChange((state) => {
     sleepState.value = state;

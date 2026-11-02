@@ -53,6 +53,7 @@ impl AudioEngine {
         thread::spawn(move || {
             let mut sink_handle: Option<MixerDeviceSink> = open_sink_for_device(None);
             let mut current_player: Option<Player> = None;
+            let mut overlap_player: Option<Player> = None;
             let mut current_bytes: Option<Arc<Vec<u8>>> = None;
             let mut current_volume: f32 = 1.0;
             let mut current_speed: f32 = 1.0;
@@ -60,8 +61,12 @@ impl AudioEngine {
             let mut last_seek_pos: f32 = -1.0;
             let mut last_seek_time = Instant::now();
             let mut current_generation: u64 = 0;
+            let mut overlap_generation: u64 = 0;
             let mut current_url: Option<String> = None;
+            let mut overlap_url: Option<String> = None;
             let mut pending_seek: Option<f32> = None;
+            let mut preloaded_stream: Option<(String, Arc<Vec<u8>>)> = None;
+            let mut preloaded_generation: u64 = 0;
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
@@ -71,13 +76,23 @@ impl AudioEngine {
                         start_secs,
                         generation,
                     } => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=PlayUrl url={} start={:?} status={} paused={} has_player={} has_preload={}",
+                            sanitize_url_for_log(&url),
+                            start_secs,
+                            worker_status.load(Ordering::SeqCst),
+                            is_paused,
+                            current_player.is_some(),
+                            preloaded_stream.is_some(),
+                        );
+
                         if url.contains("/cenc/")
                             || url.contains("/cbcs/")
                             || url.contains("encrypted")
                             || url.contains(".m4s")
                         {
                             let short_url = sanitize_url_for_log(&url);
-                            eprintln!("[rustcloud-audio] Rejecting encrypted/unsupported stream gen#{generation}: {short_url}");
+                            eprintln!("[rustcloud-audio] Rejecting encrypted/unsupported stream: {short_url}");
                             let _ = worker_tx.send(AudioCommand::StreamFailed {
                                 generation,
                                 error:
@@ -93,8 +108,18 @@ impl AudioEngine {
                             .map(|u| u.split('?').next().unwrap_or(u))
                             == Some(clean_new_url);
 
+                        println!(
+                            "[rustcloud-audio][dbg] PlayUrl compare same_media={} current_url={} next_url={}",
+                            same_media,
+                            current_url
+                                .as_deref()
+                                .map(|u| sanitize_url_for_log(u))
+                                .unwrap_or_else(|| "<none>".to_string()),
+                            sanitize_url_for_log(clean_new_url),
+                        );
+
                         if same_media {
-                            println!("[rustcloud-audio] Replaying existing loaded track gen#{generation} (start: {:?})", start_secs);
+                            println!("[rustcloud-audio] Replaying existing loaded track (start: {:?})", start_secs);
                             if let Some(ref player) = current_player {
                                 if let Some(secs) = start_secs {
                                     let dur = Duration::from_secs_f32(secs);
@@ -111,13 +136,20 @@ impl AudioEngine {
                             }
                         }
 
+                        if let Some(ref player) = overlap_player {
+                            player.stop();
+                            overlap_player = None;
+                        }
+                        overlap_url = None;
+                        overlap_generation = 0;
+
                         current_generation = generation;
                         current_url = Some(url.clone());
                         pending_seek = start_secs;
                         worker_status.store(ST_LOADING, Ordering::SeqCst);
 
                         let short_url = sanitize_url_for_log(&url);
-                        println!("[rustcloud-audio] Loading track gen#{generation} ({short_url})");
+                        println!("[rustcloud-audio] Loading track ({short_url})");
 
                         if let Some(player) = current_player.take() {
                             player.stop();
@@ -126,6 +158,25 @@ impl AudioEngine {
                         is_paused = false;
                         last_seek_pos = start_secs.unwrap_or(0.0);
                         last_seek_time = Instant::now();
+
+                        let cached_preloaded = preloaded_stream
+                            .as_ref()
+                            .map(|(u, b)| (u.split('?').next().unwrap_or(u), Arc::clone(b)));
+                        if let Some((cached_clean_url, cached_bytes)) = cached_preloaded {
+                            if cached_clean_url == clean_new_url {
+                                preloaded_stream = None;
+                                println!(
+                                    "[rustcloud-audio] Using preloaded stream buffer ({:.2} MB)",
+                                    cached_bytes.len() as f32 / (1024.0 * 1024.0)
+                                );
+                                let _ = worker_tx.send(AudioCommand::StreamLoaded {
+                                    generation,
+                                    bytes: cached_bytes,
+                                    start_secs,
+                                });
+                                continue;
+                            }
+                        }
 
                         let tx_clone = worker_tx.clone();
                         let proxy_cfg = worker_proxy_config
@@ -146,7 +197,7 @@ impl AudioEngine {
                                     },
                                 ) {
                                     println!(
-                                        "[rustcloud-audio] Resolved direct media URL gen#{generation}: {}",
+                                        "[rustcloud-audio] Resolved direct media URL: {}",
                                         sanitize_url_for_log(&direct)
                                     );
                                     download_url = direct;
@@ -166,7 +217,159 @@ impl AudioEngine {
                                     });
                                 }
                                 Err(err) => {
-                                    eprintln!("[rustcloud-audio] Stream download failed gen#{generation}: {err}");
+                                    eprintln!("[rustcloud-audio] Stream download failed: {err}");
+                                    let _ = tx_clone.send(AudioCommand::StreamFailed {
+                                        generation,
+                                        error: err,
+                                    });
+                                }
+                            }
+                        });
+                    }
+
+                    AudioCommand::PreloadUrl {
+                        url,
+                        auth_header,
+                        generation,
+                    } => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=PreloadUrl url={} status={} has_preload={}",
+                            sanitize_url_for_log(&url),
+                            worker_status.load(Ordering::SeqCst),
+                            preloaded_stream.is_some(),
+                        );
+
+                        let clean_new_url = url.split('?').next().unwrap_or(&url).to_string();
+                        if let Some((cached_url, _)) = preloaded_stream.as_ref() {
+                            let clean_cached_url =
+                                cached_url.split('?').next().unwrap_or(cached_url.as_str());
+                            if clean_cached_url == clean_new_url {
+                                println!(
+                                    "[rustcloud-audio] Preload already cached: {}",
+                                    sanitize_url_for_log(&url)
+                                );
+                                preloaded_generation = generation;
+                                continue;
+                            }
+                        }
+
+                        preloaded_generation = generation;
+                        println!(
+                            "[rustcloud-audio] Preloading stream: {}",
+                            sanitize_url_for_log(&url)
+                        );
+
+                        let tx_clone = worker_tx.clone();
+                        let proxy_cfg = worker_proxy_config
+                            .read()
+                            .ok()
+                            .map(|c| c.clone())
+                            .unwrap_or_default();
+
+                        thread::spawn(move || {
+                            let mut download_url = url.clone();
+                            if !url.contains(".m3u8") && !is_audio_cdn_url(&url) {
+                                if let Some(direct) = resolve_direct_media_url(
+                                    &url,
+                                    auth_header.as_deref(),
+                                    if proxy_cfg.enabled {
+                                        proxy_cfg.url.as_deref()
+                                    } else {
+                                        None
+                                    },
+                                ) {
+                                    download_url = direct;
+                                }
+                            }
+
+                            match stream::download_stream_bytes(
+                                &download_url,
+                                auth_header.as_deref(),
+                                Some(&proxy_cfg),
+                            ) {
+                                Ok(data) => {
+                                    let _ = tx_clone.send(AudioCommand::StreamPreloaded {
+                                        generation,
+                                        url,
+                                        bytes: Arc::new(data),
+                                    });
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "[rustcloud-audio] Preload stream download failed: {err}"
+                                    );
+                                }
+                            }
+                        });
+                    }
+
+                    AudioCommand::PlayUrlOverlap {
+                        url,
+                        auth_header,
+                        start_secs,
+                        generation,
+                    } => {
+                        if url.contains("/cenc/")
+                            || url.contains("/cbcs/")
+                            || url.contains("encrypted")
+                            || url.contains(".m4s")
+                        {
+                            let short_url = sanitize_url_for_log(&url);
+                            eprintln!("[rustcloud-audio] Rejecting encrypted/unsupported overlap stream: {short_url}");
+                            let _ = worker_tx.send(AudioCommand::StreamFailed {
+                                generation,
+                                error:
+                                    "stream is DRM encrypted (cenc/cbcs) or an unparseable fragment"
+                                        .to_string(),
+                            });
+                            continue;
+                        }
+
+                        overlap_generation = generation;
+                        overlap_url = Some(url.clone());
+                        worker_status.store(ST_LOADING, Ordering::SeqCst);
+
+                        if let Some(ref player) = overlap_player {
+                            player.stop();
+                            overlap_player = None;
+                        }
+
+                        let tx_clone = worker_tx.clone();
+                        let proxy_cfg = worker_proxy_config
+                            .read()
+                            .ok()
+                            .map(|c| c.clone())
+                            .unwrap_or_default();
+                        thread::spawn(move || {
+                            let mut download_url = url.clone();
+                            if !url.contains(".m3u8") && !is_audio_cdn_url(&url) {
+                                if let Some(direct) = resolve_direct_media_url(
+                                    &url,
+                                    auth_header.as_deref(),
+                                    if proxy_cfg.enabled {
+                                        proxy_cfg.url.as_deref()
+                                    } else {
+                                        None
+                                    },
+                                ) {
+                                    download_url = direct;
+                                }
+                            }
+
+                            match stream::download_stream_bytes(
+                                &download_url,
+                                auth_header.as_deref(),
+                                Some(&proxy_cfg),
+                            ) {
+                                Ok(data) => {
+                                    let _ = tx_clone.send(AudioCommand::StreamLoaded {
+                                        generation,
+                                        bytes: Arc::new(data),
+                                        start_secs,
+                                    });
+                                }
+                                Err(err) => {
+                                    eprintln!("[rustcloud-audio] Overlap stream download failed: {err}");
                                     let _ = tx_clone.send(AudioCommand::StreamFailed {
                                         generation,
                                         error: err,
@@ -181,12 +384,21 @@ impl AudioEngine {
                         bytes,
                         start_secs,
                     } => {
-                        if generation != current_generation {
-                            println!("[rustcloud-audio] Discarding stale StreamLoaded gen#{generation} (current: {current_generation})");
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=StreamLoaded bytes_mb={:.2} start={:?} current_gen={} overlap_gen={}",
+                            bytes.len() as f32 / (1024.0 * 1024.0),
+                            start_secs,
+                            current_generation,
+                            overlap_generation,
+                        );
+
+                        let is_current = generation == current_generation;
+                        let is_overlap = generation == overlap_generation;
+                        if !is_current && !is_overlap {
+                            println!("[rustcloud-audio] Discarding stale StreamLoaded (outdated request)");
                             continue;
                         }
 
-                        current_bytes = Some(bytes.clone());
                         let sink = match sink_handle {
                             Some(ref s) => s,
                             None => {
@@ -202,11 +414,12 @@ impl AudioEngine {
                         };
 
                         let target_seek = start_secs.or(pending_seek.take());
+                        let volume = if is_current { current_volume } else { 0.0 };
                         match setup_player(
                             sink,
                             &bytes,
                             target_seek,
-                            current_volume,
+                            volume,
                             current_speed,
                             is_paused,
                             worker_dsp_config.clone(),
@@ -217,13 +430,20 @@ impl AudioEngine {
                                 if let Some(secs) = target_seek {
                                     last_seek_pos = secs;
                                 }
-                                current_player = Some(player);
-                                worker_status.store(ST_READY, Ordering::SeqCst);
-                                let mb = bytes.len() as f32 / (1024.0 * 1024.0);
-                                println!("[rustcloud-audio] Playback started gen#{generation} ({mb:.2} MB buffer)");
+                                if is_current {
+                                    current_bytes = Some(bytes.clone());
+                                    current_player = Some(player);
+                                    worker_status.store(ST_READY, Ordering::SeqCst);
+                                    let mb = bytes.len() as f32 / (1024.0 * 1024.0);
+                                    println!("[rustcloud-audio] Playback started ({mb:.2} MB buffer)");
+                                } else {
+                                    overlap_player = Some(player);
+                                    worker_status.store(ST_READY, Ordering::SeqCst);
+                                    println!("[rustcloud-audio] Overlap track queued");
+                                }
                             }
                             Err(e) => {
-                                eprintln!("[rustcloud-audio] Failed to setup player gen#{generation}: {e}");
+                                eprintln!("[rustcloud-audio] Failed to setup player: {e}");
                                 worker_status.store(ST_FAILED, Ordering::SeqCst);
                             }
                         }
@@ -231,12 +451,41 @@ impl AudioEngine {
 
                     AudioCommand::StreamFailed { generation, error } => {
                         if generation == current_generation {
-                            eprintln!("[rustcloud-audio] Stream failed gen#{generation}: {error}");
+                            eprintln!("[rustcloud-audio] Stream failed: {error}");
                             worker_status.store(ST_FAILED, Ordering::SeqCst);
                         }
                     }
 
+                    AudioCommand::StreamPreloaded {
+                        generation,
+                        url,
+                        bytes,
+                    } => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=StreamPreloaded url={} bytes_mb={:.2}",
+                            sanitize_url_for_log(&url),
+                            bytes.len() as f32 / (1024.0 * 1024.0),
+                        );
+                        if generation != preloaded_generation {
+                            println!(
+                                "[rustcloud-audio] Discarding stale StreamPreloaded (outdated request)"
+                            );
+                            continue;
+                        }
+
+                        let cached_url = url.split('?').next().unwrap_or(&url).to_string();
+                        let mb = bytes.len() as f32 / (1024.0 * 1024.0);
+                        preloaded_stream = Some((cached_url, bytes));
+                        println!("[rustcloud-audio] Preload ready ({mb:.2} MB)");
+                    }
+
                     AudioCommand::Pause => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=Pause status={} has_player={} paused_before={}",
+                            worker_status.load(Ordering::SeqCst),
+                            current_player.is_some(),
+                            is_paused,
+                        );
                         is_paused = true;
                         if let Some(ref player) = current_player {
                             if !player.is_paused() {
@@ -251,9 +500,20 @@ impl AudioEngine {
                                 );
                             }
                         }
+                        if let Some(ref player) = overlap_player {
+                            if !player.is_paused() {
+                                player.pause();
+                            }
+                        }
                     }
 
                     AudioCommand::Resume => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=Resume status={} has_player={} paused_before={}",
+                            worker_status.load(Ordering::SeqCst),
+                            current_player.is_some(),
+                            is_paused,
+                        );
                         is_paused = false;
                         if let Some(ref player) = current_player {
                             if player.is_paused() {
@@ -262,15 +522,43 @@ impl AudioEngine {
                                 println!("[rustcloud-audio] Resumed");
                             }
                         }
+                        if let Some(ref player) = overlap_player {
+                            if player.is_paused() {
+                                player.play();
+                            }
+                        }
                     }
 
                     AudioCommand::Stop => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=Stop status={} current_url={} overlap_url={} paused={} has_player={} has_overlap={} has_preload={}",
+                            worker_status.load(Ordering::SeqCst),
+                            current_url
+                                .as_deref()
+                                .map(|u| sanitize_url_for_log(u))
+                                .unwrap_or_else(|| "<none>".to_string()),
+                            overlap_url
+                                .as_deref()
+                                .map(|u| sanitize_url_for_log(u))
+                                .unwrap_or_else(|| "<none>".to_string()),
+                            is_paused,
+                            current_player.is_some(),
+                            overlap_player.is_some(),
+                            preloaded_stream.is_some(),
+                        );
                         if let Some(ref player) = current_player {
                             player.stop();
                         }
+                        if let Some(ref player) = overlap_player {
+                            player.stop();
+                        }
                         current_player = None;
+                        overlap_player = None;
                         current_bytes = None;
                         current_url = None;
+                        overlap_url = None;
+                        current_generation = 0;
+                        overlap_generation = 0;
                         is_paused = false;
                         last_seek_pos = -1.0;
                         worker_status.store(ST_IDLE, Ordering::SeqCst);
@@ -278,6 +566,13 @@ impl AudioEngine {
                     }
 
                     AudioCommand::Seek(seconds) => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=Seek to={:.2}s status={} has_player={} paused={}",
+                            seconds,
+                            worker_status.load(Ordering::SeqCst),
+                            current_player.is_some(),
+                            is_paused,
+                        );
                         println!("[rustcloud-audio] Seeking to {:.2}s", seconds);
                         last_seek_pos = seconds;
                         last_seek_time = Instant::now();
@@ -314,9 +609,47 @@ impl AudioEngine {
                     }
 
                     AudioCommand::SetVolume(vol) => {
+                        println!(
+                            "[rustcloud-audio][dbg] cmd=SetVolume {:.3} status={} has_player={}",
+                            vol,
+                            worker_status.load(Ordering::SeqCst),
+                            current_player.is_some(),
+                        );
                         current_volume = vol;
                         if let Some(ref player) = current_player {
                             player.set_volume(vol);
+                        }
+                    }
+
+                    AudioCommand::SetOverlapVolume(vol) => {
+                        if let Some(ref player) = overlap_player {
+                            player.set_volume(vol);
+                        }
+                    }
+
+                    AudioCommand::FinalizeOverlap => {
+                        if let Some(ref player) = current_player {
+                            player.stop();
+                        }
+                        if let Some(next_player) = overlap_player.take() {
+                            current_player = Some(next_player);
+                        }
+                        if let Some(next_url) = overlap_url.take() {
+                            current_url = Some(next_url);
+                        }
+                        if overlap_generation != 0 {
+                            current_generation = overlap_generation;
+                        }
+                        overlap_generation = 0;
+                        overlap_url = None;
+                        if let Some(ref player) = current_player {
+                            current_volume = 1.0;
+                            player.set_volume(current_volume);
+                            if is_paused {
+                                player.pause();
+                            } else {
+                                player.play();
+                            }
                         }
                     }
 
@@ -491,7 +824,7 @@ impl AudioEngine {
     ) -> Result<(), String> {
         let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         println!(
-            "[rustcloud-audio] play_url gen#{gen}: {} (start_secs: {:?})",
+            "[rustcloud-audio] play_url: {} (start_secs: {:?})",
             sanitize_url_for_log(&url),
             start_secs
         );
@@ -509,19 +842,67 @@ impl AudioEngine {
         }
     }
 
+    pub fn preload_url(&self, url: String, auth_header: Option<String>) -> Result<(), String> {
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        println!(
+            "[rustcloud-audio] preload_url: {}",
+            sanitize_url_for_log(&url)
+        );
+        if let Ok(tx) = self.tx.lock() {
+            tx.send(AudioCommand::PreloadUrl {
+                url,
+                auth_header,
+                generation: gen,
+            })
+            .map_err(|e| e.to_string())
+        } else {
+            eprintln!("[rustcloud-audio] preload_url failed: audio channel locked");
+            Err("audio channel locked".to_string())
+        }
+    }
+
+    pub fn play_url_overlap(
+        &self,
+        url: String,
+        auth_header: Option<String>,
+        start_secs: Option<f32>,
+    ) -> Result<(), String> {
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        println!(
+            "[rustcloud-audio] play_url_overlap: {} (start_secs: {:?})",
+            sanitize_url_for_log(&url),
+            start_secs
+        );
+        if let Ok(tx) = self.tx.lock() {
+            tx.send(AudioCommand::PlayUrlOverlap {
+                url,
+                auth_header,
+                start_secs,
+                generation: gen,
+            })
+            .map_err(|e| e.to_string())
+        } else {
+            eprintln!("[rustcloud-audio] play_url_overlap failed: audio channel locked");
+            Err("audio channel locked".to_string())
+        }
+    }
+
     pub fn pause(&self) {
+        println!("[rustcloud-audio][dbg] api=pause");
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.send(AudioCommand::Pause);
         }
     }
 
     pub fn resume(&self) {
+        println!("[rustcloud-audio][dbg] api=resume");
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.send(AudioCommand::Resume);
         }
     }
 
     pub fn stop(&self) {
+        println!("[rustcloud-audio][dbg] api=stop");
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.send(AudioCommand::Stop);
@@ -529,14 +910,28 @@ impl AudioEngine {
     }
 
     pub fn seek(&self, seconds: f32) {
+        println!("[rustcloud-audio][dbg] api=seek {:.2}s", seconds);
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.send(AudioCommand::Seek(seconds));
         }
     }
 
     pub fn set_volume(&self, volume: f32) {
+        println!("[rustcloud-audio][dbg] api=set_volume {:.3}", volume);
         if let Ok(tx) = self.tx.lock() {
             let _ = tx.send(AudioCommand::SetVolume(volume));
+        }
+    }
+
+    pub fn set_overlap_volume(&self, volume: f32) {
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.send(AudioCommand::SetOverlapVolume(volume));
+        }
+    }
+
+    pub fn finalize_overlap(&self) {
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.send(AudioCommand::FinalizeOverlap);
         }
     }
 

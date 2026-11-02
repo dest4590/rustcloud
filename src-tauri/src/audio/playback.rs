@@ -9,12 +9,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub fn get_device_name(dev: &Device) -> String {
-    if let Ok(desc) = dev.description() {
-        return desc.name().to_string();
+    match dev.description() {
+        Ok(desc) => desc.name().to_string(),
+        Err(_) => "Unknown Output Device".to_string(),
     }
-    #[allow(deprecated)]
-    dev.name()
-        .unwrap_or_else(|_| "Unknown Output Device".to_string())
 }
 
 pub fn open_sink_for_device(device_name: Option<&str>) -> Option<MixerDeviceSink> {
