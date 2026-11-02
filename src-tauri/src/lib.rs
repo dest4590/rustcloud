@@ -8,10 +8,55 @@ mod tray;
 use audio::AudioEngine;
 use discord::DiscordRpcState;
 use smtc::SmtcManager;
+use std::process::Command;
 use std::sync::Arc;
 use tauri::webview::NewWindowResponse;
-use tauri::{Listener, Manager, WebviewUrl, WindowEvent};
+use tauri::{Emitter, Listener, Manager, WebviewUrl, WindowEvent};
 use tray::TrayManager;
+
+#[cfg(target_os = "linux")]
+fn gstreamer_audio_sink_output_available(output: &str) -> bool {
+    let lowered = output.to_ascii_lowercase();
+    !lowered.contains("not found")
+        && !lowered.contains("no such element")
+        && !lowered.contains("no such plugin")
+        && !lowered.contains("could not be found")
+        && (lowered.contains("auto audio sink")
+            || lowered.contains("autoaudiosink")
+            || lowered.contains("factory details")
+            || lowered.contains("plugin details"))
+}
+
+#[cfg(target_os = "linux")]
+fn gstreamer_audio_sink_available() -> bool {
+    let output = Command::new("gst-inspect-1.0").arg("autoaudiosink").output();
+    let Ok(output) = output else {
+        return false;
+    };
+
+    if output.status.success() {
+        return true;
+    }
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    gstreamer_audio_sink_output_available(&combined)
+}
+
+#[cfg(target_os = "linux")]
+fn warn_if_gstreamer_missing(app: &tauri::AppHandle) {
+    if gstreamer_audio_sink_available() {
+        return;
+    }
+
+    let message = "GStreamer audio is incomplete on this Linux system: the autoaudiosink element is missing. On Arch, install the audio plugin packages such as gst-plugins-base and, for PulseAudio or PipeWire, gst-plugins-good or gst-plugin-pipewire, then restart rustcloud.";
+    eprintln!("[rustcloud] {message}");
+    let _ = app.emit("rustcloud:gstreamer-warning", message);
+}
 
 #[cfg(debug_assertions)]
 fn get_inject_script_path() -> Option<std::path::PathBuf> {
@@ -88,6 +133,33 @@ fn get_inject_script() -> &'static str {
     include_str!("../../dist/inject.js")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::gstreamer_audio_sink_output_available;
+
+    #[test]
+    fn gstreamer_audio_sink_output_available_accepts_real_linux_inspect_output() {
+        let output = r#"Factory Details:
+  Rank                     none (0)
+  Long-name                Auto audio sink
+  Klass                    Sink/Audio
+  Description              Wrapper audio sink for automatically detected audio sink
+
+Plugin Details:
+  Name                     autodetect
+  Description              Plugin contains auto-detection plugins for video/audio in- and outputs
+"#;
+
+        assert!(gstreamer_audio_sink_output_available(output));
+    }
+
+    #[test]
+    fn gstreamer_audio_sink_output_available_rejects_missing_plugin() {
+        let output = "No such element or plugin 'autoaudiosink'";
+        assert!(!gstreamer_audio_sink_output_available(output));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let discord_state = Arc::new(DiscordRpcState::new());
@@ -135,24 +207,30 @@ pub fn run() {
                     .inner_size(1366.0, 768.0)
                     .min_inner_size(800.0, 600.0)
                     .center()
-                    .initialization_script(script)
+                    .initialization_script_for_all_frames(script)
                     .on_new_window(|url, _target| {
                         let url_str = url.as_str();
-                        let is_auth = url_str.starts_with("https://secure.soundcloud.com")
-                            || url_str.starts_with("https://auth.soundcloud.com")
-                            || url_str.starts_with("https://api-v2.soundcloud.com")
-                            || url_str.contains("/signin")
-                            || url_str.contains("/connect")
-                            || url_str.contains("accounts.google.com")
-                            || url_str.contains("appleid.apple.com")
-                            || url_str.contains("facebook.com");
 
-                        if is_auth {
-                            NewWindowResponse::Allow
-                        } else {
-                            let _ = tauri_plugin_opener::open_url(url_str, None::<&str>);
-                            NewWindowResponse::Deny
+                        let is_blank_target = url_str.is_empty()
+                            || url_str == "about:blank"
+                            || url_str.starts_with("about:blank")
+                            || url_str == "about:srcdoc"
+                            || url_str.starts_with("javascript:")
+                            || url_str.starts_with("data:");
+
+                        if is_blank_target {
+                            #[cfg(target_os = "linux")]
+                            {
+                                return NewWindowResponse::Allow;
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                return NewWindowResponse::Deny;
+                            }
                         }
+
+                        let _ = tauri_plugin_opener::open_url(url_str, None::<&str>);
+                        NewWindowResponse::Deny
                     })
                     .build()?;
 
@@ -160,6 +238,9 @@ pub fn run() {
             let hwnd = window.hwnd().map(|h| h.0 as *mut std::ffi::c_void).ok();
             #[cfg(not(target_os = "windows"))]
             let hwnd = None;
+
+            #[cfg(target_os = "linux")]
+            warn_if_gstreamer_missing(app.handle());
 
             audio_engine.start_default_output_monitor();
 

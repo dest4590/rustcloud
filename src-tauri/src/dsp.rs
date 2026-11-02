@@ -91,7 +91,7 @@ pub struct DspConfig {
 impl Default for DspConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             bass_boost: 0.0,
             bands: EqualizerBands::default(),
             stereo_width: 100.0,
