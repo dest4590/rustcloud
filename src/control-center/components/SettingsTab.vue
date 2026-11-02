@@ -103,17 +103,8 @@
           @click="fetchDevices"
           title="refresh devices"
         >
-          <svg
-            viewBox="0 0 24 24"
-            width="11"
-            height="11"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path
-              d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
-            />
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
         </button>
       </div>
@@ -250,7 +241,7 @@ const showCopyLinkBtn = ref(getBooleanSetting(SETTING_KEYS.SHOW_COPY_LINK_BTN));
 const trackbarLyrics = ref(
   getBooleanSetting(SETTING_KEYS.TRACKBAR_LYRICS, true),
 );
-const rustAudio = ref(getBooleanSetting(SETTING_KEYS.RUST_AUDIO, false));
+const rustAudio = ref(getBooleanSetting(SETTING_KEYS.RUST_AUDIO, true));
 const proxyEnabled = ref(getBooleanSetting(SETTING_KEYS.PROXY_ENABLED, false));
 const proxyUrl = ref(getStringSetting(SETTING_KEYS.PROXY_URL, ""));
 const isTestingProxy = ref(false);
@@ -341,6 +332,8 @@ function handleSettingChanged(e: Event) {
   const custom = e as CustomEvent<{ key: string; value: any }>;
   if (custom.detail?.key === SETTING_KEYS.DISCORD_RPC) {
     discordRpc.value = custom.detail.value;
+  } else if (custom.detail?.key === SETTING_KEYS.RUST_AUDIO) {
+    rustAudio.value = custom.detail.value;
   } else if (custom.detail?.key === SETTING_KEYS.PROXY_ENABLED) {
     proxyEnabled.value = custom.detail.value;
   } else if (custom.detail?.key === SETTING_KEYS.PROXY_URL) {

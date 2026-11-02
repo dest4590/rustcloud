@@ -15,8 +15,9 @@
                 width="12"
                 height="12"
                 fill="currentColor"
+                aria-hidden="true"
               >
-                <path d="M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z" />
+                <path d="M3 18h4V8H3v10zm6 0h4V4h-4v14zm6 0h4v-6h-4v6z" />
               </svg>
             </template>
           </TabButton>
@@ -31,10 +32,9 @@
                 width="12"
                 height="12"
                 fill="currentColor"
+                aria-hidden="true"
               >
-                <path
-                  d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"
-                />
+                <path d="M18.5 3H6a2 2 0 0 0-2 2v13.5A2.5 2.5 0 0 0 6.5 21H18v-2H6.5a.5.5 0 0 1-.5-.5V5a.5.5 0 0 1 .5-.5h12v16h2V5a2 2 0 0 0-2-2zm-2 3h-7v2h7V6zm0 4h-7v2h7v-2zm-7 4h4v2h-4v-2z" />
               </svg>
             </template>
           </TabButton>
@@ -49,10 +49,9 @@
                 width="12"
                 height="12"
                 fill="currentColor"
+                aria-hidden="true"
               >
-                <path
-                  d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"
-                />
+                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
               </svg>
             </template>
           </TabButton>
@@ -67,37 +66,24 @@
                 width="12"
                 height="12"
                 fill="currentColor"
+                aria-hidden="true"
               >
-                <path
-                  d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"
-                />
+                <path d="M19.14 12.94c.04-.31.06-.62.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.18l-2.39.96a7.02 7.02 0 0 0-1.63-.94L14.5 2.5a.5.5 0 0 0-.5-.5h-3.99a.5.5 0 0 0-.5.5l-.25 2.46c-.57.23-1.1.57-1.61.94l-2.39-.96a.5.5 0 0 0-.61.18L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.14.25.44.34.61.18l2.39-.96c.51.37 1.04.71 1.61.94l.25 2.46a.5.5 0 0 0 .5.5h3.99a.5.5 0 0 0 .5-.5l.25-2.46c.57-.23 1.1-.57 1.61-.94l2.39.96c.17.16.47.07.61-.18l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z" />
               </svg>
             </template>
           </TabButton>
         </div>
         <button class="rc-hide-btn" title="close" @click="handleClose">
-          <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor">
-            <path
-              d="M6.94 8l-4.47 4.47 1.06 1.06L8 9.06l4.47 4.47 1.06-1.06L9.06 8l4.47-4.47-1.06-1.06L8 6.94 3.53 2.47 2.47 3.53 6.94 8z"
-            />
+          <svg
+            viewBox="0 0 16 16"
+            width="11"
+            height="11"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M4.4 3.4L8 7l3.6-3.6L12.6 4 9 7.6l3.6 3.6-1.1 1.1L8 8.7 4.4 12.3l-1.1-1.1L6.9 7.6 3.3 4l1.1-1.1z" />
           </svg>
         </button>
-      </div>
-
-      <div v-if="isDrmFallback" class="rc-drm-banner">
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          style="flex-shrink: 0"
-        >
-          <rect x="3" y="11" width="18" height="11" rx="0" ry="0" />
-          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-        <span>Track is encrypted, playing without DRM</span>
       </div>
 
       <div class="rc-body">
@@ -118,16 +104,11 @@ import EqualizerTab from "./components/EqualizerTab.vue";
 import LyricsTab from "./components/LyricsTab.vue";
 import DownloadTab from "./components/DownloadTab.vue";
 import SettingsTab from "./components/SettingsTab.vue";
-import {
-  extractTrackInfo,
-  isNativeDrmFallbackActive,
-  TrackInfo,
-} from "../audio/player";
+import { extractTrackInfo, TrackInfo } from "../audio/player";
 
 const emit = defineEmits<{ (e: "close"): void }>();
 const tab = ref<"equalizer" | "lyrics" | "download" | "settings">("equalizer");
 const isClosing = ref(false);
-const isDrmFallback = ref(isNativeDrmFallbackActive());
 
 function handleClose() {
   if (isClosing.value) return;
@@ -151,7 +132,6 @@ let timer: number | null = null;
 function syncTrack() {
   const current = extractTrackInfo();
   if (current) Object.assign(track, current);
-  isDrmFallback.value = isNativeDrmFallbackActive();
 }
 
 function handleSwitchTab(e: Event) {
@@ -163,22 +143,15 @@ function handleSwitchTab(e: Event) {
   }
 }
 
-function handleDrmFallback(e: Event) {
-  const custom = e as CustomEvent<{ active: boolean }>;
-  isDrmFallback.value = custom.detail?.active ?? isNativeDrmFallbackActive();
-}
-
 onMounted(() => {
   syncTrack();
   timer = window.setInterval(syncTrack, 800);
   window.addEventListener("rustcloud:switch-tab", handleSwitchTab);
-  window.addEventListener("rustcloud:drm-fallback", handleDrmFallback);
 });
 
 onUnmounted(() => {
   if (timer) clearInterval(timer);
   window.removeEventListener("rustcloud:switch-tab", handleSwitchTab);
-  window.removeEventListener("rustcloud:drm-fallback", handleDrmFallback);
 });
 </script>
 

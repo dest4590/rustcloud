@@ -1,7 +1,7 @@
 import { createApp, App as VueApp } from "vue";
 import ControlCenter from "./ControlCenter.vue";
 import { downloadTrack } from "../downloader/downloader";
-import { extractTrackInfo, isNativeDrmFallbackActive } from "../audio/player";
+import { extractTrackInfo } from "../audio/player";
 import { copyToClipboard } from "../core/utils";
 import { toast } from "./toast";
 import { SETTING_KEYS, getBooleanSetting, getStringSetting } from "./settings";
@@ -11,7 +11,6 @@ const CC_BTN_ID = "rustcloud-cc-btn";
 const DL_BTN_ID = "rustcloud-dl-btn";
 const COPY_BTN_ID = "rustcloud-copy-btn";
 const PROXY_BADGE_ID = "rustcloud-proxy-badge";
-const DRM_BADGE_ID = "rustcloud-drm-badge";
 
 let appInstance: VueApp | null = null;
 let controlsAbortController: AbortController | null = null;
@@ -69,63 +68,6 @@ function styleProxyBadge(btn: HTMLElement): void {
   });
 }
 
-function styleDrmBadge(btn: HTMLElement): void {
-  Object.assign(btn.style, {
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "5px",
-    background: "#181410",
-    border: "1px solid #442a15",
-    color: "#ff8833",
-    cursor: "pointer",
-    padding: "2px 8px",
-    fontSize: "10px",
-    fontWeight: "600",
-    fontFamily: "monospace",
-    textTransform: "lowercase",
-    margin: "0 4px",
-    height: "22px",
-    boxSizing: "border-box",
-    borderRadius: "0",
-    userSelect: "none",
-    transition: "all 0.15s ease",
-    verticalAlign: "middle",
-  });
-
-  btn.addEventListener("mouseenter", () => {
-    btn.style.background = "#221a12";
-    btn.style.borderColor = "#ff8833";
-  });
-  btn.addEventListener("mouseleave", () => {
-    btn.style.background = "#181410";
-    btn.style.borderColor = "#442a15";
-  });
-}
-
-function updateDrmBadgeContent(el?: HTMLElement | null): void {
-  const badge = el || document.getElementById(DRM_BADGE_ID);
-  if (!badge) return;
-
-  const active = isNativeDrmFallbackActive();
-  if (!active) {
-    if (badge.style.display !== "none") {
-      badge.style.display = "none";
-    }
-    return;
-  }
-
-  badge.style.display = "inline-flex";
-  badge.title =
-    "Track is encrypted, playing without DRM - click to open control center";
-  badge.innerHTML = `
-    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;">
-      <rect x="3" y="11" width="18" height="11" rx="0" ry="0"/>
-      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-    </svg>
-    <span>Track is encrypted, playing without DRM</span>
-  `;
-}
-
 function updateProxyBadgeContent(el?: HTMLElement | null): void {
   const badge = el || document.getElementById(PROXY_BADGE_ID);
   if (!badge) return;
@@ -161,11 +103,7 @@ function updateProxyBadgeContent(el?: HTMLElement | null): void {
     : "streaming through proxy - click to configure";
 
   badge.innerHTML = `
-    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;">
-      <circle cx="12" cy="12" r="9"/>
-      <path d="M12 3a15.3 15.3 0 0 1 4 9 15.3 15.3 0 0 1-4 9 15.3 15.3 0 0 1-4-9 15.3 15.3 0 0 1 4-9z"/>
-      <path d="M3 12h18"/>
-    </svg>
+    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="display:block;flex-shrink:0;" aria-hidden="true"><path d="M7 7h10v10H7zM4 4h16v16H4zM9 9l6 6M15 9l-6 6" /></svg>
     <span>${label}</span>
   `;
 }
@@ -294,7 +232,6 @@ export function initControlsIntegration(): void {
   document.getElementById(DL_BTN_ID)?.remove();
   document.getElementById(COPY_BTN_ID)?.remove();
   document.getElementById(PROXY_BADGE_ID)?.remove();
-  document.getElementById(DRM_BADGE_ID)?.remove();
 
   function updateDownloadBtnVisibility() {
     const dlBtn = document.getElementById(DL_BTN_ID);
@@ -326,7 +263,7 @@ export function initControlsIntegration(): void {
       const btn = document.createElement("button");
       btn.id = CC_BTN_ID;
       btn.title = "RustCloud Control Center (Alt+R)";
-      btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="display:block;" aria-hidden="true"><path d="M19.14 12.94c.04-.31.06-.62.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.18l-2.39.96a7.02 7.02 0 0 0-1.63-.94L14.5 2.5a.5.5 0 0 0-.5-.5h-3.99a.5.5 0 0 0-.5.5l-.25 2.46c-.57.23-1.1.57-1.61.94l-2.39-.96a.5.5 0 0 0-.61.18L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.14.25.44.34.61.18l2.39-.96c.51.37 1.04.71 1.61.94l.25 2.46a.5.5 0 0 0 .5.5h3.99a.5.5 0 0 0 .5-.5l.25-2.46c.57-.23 1.1-.57 1.61-.94l2.39.96c.17.16.47.07.61-.18l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5z" /></svg>`;
       styleControlBtn(btn);
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -344,7 +281,7 @@ export function initControlsIntegration(): void {
       const dlBtn = document.createElement("button");
       dlBtn.id = DL_BTN_ID;
       dlBtn.title = "Download MP3";
-      dlBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>`;
+      dlBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="display:block;" aria-hidden="true"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" /></svg>`;
       styleControlBtn(dlBtn);
       dlBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -367,7 +304,7 @@ export function initControlsIntegration(): void {
       const copyBtn = document.createElement("button");
       copyBtn.id = COPY_BTN_ID;
       copyBtn.title = "Copy Track Link";
-      copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>`;
+      copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="display:block;" aria-hidden="true"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" /></svg>`;
       styleControlBtn(copyBtn);
       copyBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -419,47 +356,7 @@ export function initControlsIntegration(): void {
       }
     }
 
-    if (!document.getElementById(DRM_BADGE_ID)) {
-      const badge = document.createElement("div");
-      badge.id = DRM_BADGE_ID;
-      badge.setAttribute("role", "button");
-      badge.setAttribute("tabindex", "0");
-      styleDrmBadge(badge);
-      updateDrmBadgeContent(badge);
-
-      badge.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        openControlCenter("equalizer");
-      });
-
-      const proxyBadge = document.getElementById(PROXY_BADGE_ID);
-      const copyBtn = document.getElementById(COPY_BTN_ID);
-      const dlBtn = document.getElementById(DL_BTN_ID);
-      const ccBtn = document.getElementById(CC_BTN_ID);
-      if (proxyBadge && proxyBadge.parentNode) {
-        proxyBadge.parentNode.insertBefore(badge, proxyBadge.nextSibling);
-      } else if (copyBtn && copyBtn.parentNode) {
-        copyBtn.parentNode.insertBefore(badge, copyBtn.nextSibling);
-      } else if (dlBtn && dlBtn.parentNode) {
-        dlBtn.parentNode.insertBefore(badge, dlBtn.nextSibling);
-      } else if (ccBtn && ccBtn.parentNode) {
-        ccBtn.parentNode.insertBefore(badge, ccBtn.nextSibling);
-      } else if (soundBadge) {
-        playControls.insertBefore(badge, soundBadge);
-      } else {
-        playControls.appendChild(badge);
-      }
-    }
   }
-
-  window.addEventListener(
-    "rustcloud:drm-fallback",
-    () => {
-      updateDrmBadgeContent();
-    },
-    { signal },
-  );
 
   window.addEventListener(
     "rustcloud:setting-changed",
@@ -486,7 +383,6 @@ export function initControlsIntegration(): void {
     injectDebounce = window.setTimeout(() => {
       injectDebounce = null;
       injectButtons();
-      updateDrmBadgeContent();
     }, 200);
   };
   const obs = new MutationObserver(throttledInject);

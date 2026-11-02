@@ -334,7 +334,7 @@ function hookDomElements(): void {
           typeof value === "string" &&
           shouldBlockRequest(value)
         ) {
-          return rawSet.call(this, "data:text/javascript;/*blocked*/");
+          return rawSet.call(this, "data:text/javascript,void%200;");
         }
         return rawSet.call(this, value);
       },
@@ -345,6 +345,7 @@ function hookDomElements(): void {
 
   const iframeProto = HTMLIFrameElement.prototype;
   const iframeSrcDesc = Object.getOwnPropertyDescriptor(iframeProto, "src");
+  const blockedIframeUrl = "data:text/html;charset=utf-8,%3Cbody%3E%3C%2Fbody%3E";
   if (iframeSrcDesc && iframeSrcDesc.set) {
     const rawSet = iframeSrcDesc.set;
     Object.defineProperty(iframeProto, "src", {
@@ -354,7 +355,7 @@ function hookDomElements(): void {
           typeof value === "string" &&
           shouldBlockRequest(value)
         ) {
-          return rawSet.call(this, "about:blank");
+          return rawSet.call(this, blockedIframeUrl);
         }
         return rawSet.call(this, value);
       },
@@ -365,24 +366,27 @@ function hookDomElements(): void {
 
   const origSetAttribute = Element.prototype.setAttribute;
   Element.prototype.setAttribute = function (name: string, value: string) {
-    if (
-      isAdblockEnabled() &&
-      (name === "src" || name === "data-src") &&
-      typeof value === "string" &&
-      shouldBlockRequest(value)
-    ) {
-      if (this instanceof HTMLScriptElement) {
+    if (!isAdblockEnabled()) {
+      return origSetAttribute.call(this, name, value);
+    }
+
+    if ((name === "src" || name === "data-src") && typeof value === "string") {
+      if (this instanceof HTMLScriptElement && shouldBlockRequest(value)) {
         return origSetAttribute.call(
           this,
           name,
-          "data:text/javascript;/*blocked*/",
+          "data:text/javascript,void%200;",
         );
       }
-      if (this instanceof HTMLIFrameElement) {
-        return origSetAttribute.call(this, name, "about:blank");
+      if (this instanceof HTMLIFrameElement && shouldBlockRequest(value)) {
+        return origSetAttribute.call(
+          this,
+          name,
+          "data:text/html;charset=utf-8,%3Cbody%3E%3C%2Fbody%3E",
+        );
       }
-      return;
     }
+
     return origSetAttribute.call(this, name, value);
   };
 }

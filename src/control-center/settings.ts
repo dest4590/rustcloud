@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { invalidateStreamCache } from "../downloader/downloader";
+import { toast } from "./toast";
 
 export interface SettingsState {
   discordRpc: boolean;
@@ -82,6 +83,7 @@ export function setBooleanSetting(key: string, value: boolean): void {
 }
 
 let settingsSyncInitialized = false;
+let hasShownGstreamerWarning = false;
 
 export function initSettingsSync(): void {
   if (settingsSyncInitialized) return;
@@ -122,5 +124,17 @@ export function initSettingsSync(): void {
         }),
       );
     }
+  }).catch(() => {});
+
+  listen<string>("rustcloud:gstreamer-warning", (event) => {
+    if (hasShownGstreamerWarning) return;
+
+    const message =
+      typeof event.payload === "string" && event.payload.trim()
+        ? event.payload
+        : "Audio playback is unavailable because GStreamer autoaudiosink is missing.";
+
+    hasShownGstreamerWarning = true;
+    toast.warning(message, 10000);
   }).catch(() => {});
 }

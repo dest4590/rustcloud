@@ -15,11 +15,9 @@
             {{
               !isRustAudio
                 ? "requires rust native audio player"
-                : isDrmFallback
-                  ? "Track is encrypted, playing without DRM"
-                  : config.enabled
-                    ? "enabled"
-                    : "disabled"
+                : config.enabled
+                  ? "enabled"
+                  : "disabled"
             }}
           </div>
         </div>
@@ -1033,13 +1031,11 @@ import {
   DspConfig,
 } from "../../audio/dsp";
 import { SETTING_KEYS, getBooleanSetting } from "../settings";
-import { isNativeDrmFallbackActive } from "../../audio/player";
 
 const subTab = ref<"eq" | "effects">("eq");
 const config = reactive<DspConfig>(loadDspConfig());
 const activePreset = ref(detectActivePreset(config));
-const isRustAudio = ref(getBooleanSetting(SETTING_KEYS.RUST_AUDIO, false));
-const isDrmFallback = ref(isNativeDrmFallbackActive());
+const isRustAudio = ref(getBooleanSetting(SETTING_KEYS.RUST_AUDIO, true));
 
 const hoveredBand = ref<keyof EqualizerBands | null>(null);
 const activeDragNode = ref<keyof EqualizerBands | null>(null);
@@ -1123,19 +1119,12 @@ function handleSettingChanged(e: Event) {
   }
 }
 
-function handleDrmFallback(e: Event) {
-  const custom = e as CustomEvent<{ active: boolean }>;
-  isDrmFallback.value = custom.detail?.active ?? isNativeDrmFallbackActive();
-}
-
 onMounted(() => {
   window.addEventListener("rustcloud:setting-changed", handleSettingChanged);
-  window.addEventListener("rustcloud:drm-fallback", handleDrmFallback);
 });
 
 onUnmounted(() => {
   window.removeEventListener("rustcloud:setting-changed", handleSettingChanged);
-  window.removeEventListener("rustcloud:drm-fallback", handleDrmFallback);
 });
 
 function detectActivePreset(c: DspConfig): string {
