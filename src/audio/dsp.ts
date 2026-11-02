@@ -192,7 +192,7 @@ export const DSP_PRESETS: Record<string, DspPreset> = {
 const STORAGE_KEY = "rustcloud_dsp_config_v1";
 
 const DEFAULT_CONFIG: DspConfig = {
-  enabled: false,
+  enabled: true,
   bassBoost: 0,
   bands: {
     b32: 0,
@@ -229,7 +229,7 @@ export function loadDspConfig(): DspConfig {
       const parsed = JSON.parse(raw);
       const isRustAudioEnabled = getBooleanSetting(
         SETTING_KEYS.RUST_AUDIO,
-        false,
+        true,
       );
       return {
         ...DEFAULT_CONFIG,

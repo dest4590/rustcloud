@@ -405,7 +405,7 @@ let lastSentVolume = -1;
 
 export function isRustAudioActive(): boolean {
   return (
-    getBooleanSetting(SETTING_KEYS.RUST_AUDIO, false) ||
+    getBooleanSetting(SETTING_KEYS.RUST_AUDIO, true) ||
     getBooleanSetting(SETTING_KEYS.PROXY_ENABLED, false)
   );
 }
@@ -607,10 +607,10 @@ async function startTrackPlayback(track: TrackInfo): Promise<void> {
 
     if (!resolved || !resolved.streamUrl) {
       console.log(
-        "[rustcloud-player] No unencrypted stream available for Rust. Using native WebView2 fallback.",
+        "[rustcloud-player] No playable stream resolved yet for Rust. Retrying later without forcing fallback.",
       );
-      setDrmFallbackActive(true);
-      activateWebviewFallback();
+      rustPlaybackFailed = false;
+      setDrmFallbackActive(false);
       return;
     }
 

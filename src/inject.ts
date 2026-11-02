@@ -1,5 +1,6 @@
 import { onDomReady } from "./core/dom";
 import { initAdblock } from "./features/adblock";
+import { initBrowserAuth } from "./features/browser_auth";
 import { initPlayerSync } from "./audio/player";
 import { initMediaControls } from "./audio/media_controls";
 import { initAudioDsp } from "./audio/dsp";
@@ -16,6 +17,8 @@ import { initSettingsSync } from "./control-center/settings";
 import { initTrackbarLyrics } from "./lyrics/trackbar_lyrics";
 
 try {
+  initBrowserAuth();
+
   if (window.top === window.self) {
     const isHotReload = Boolean(
       (window as unknown as { __RUSTCLOUD_INJECTED__?: boolean })
